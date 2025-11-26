@@ -1,412 +1,174 @@
-// Follow this setup guide to integrate the Deno language server with your editor:
-// https://deno.land/manual/getting_started/setup_your_environment
-// This enables autocomplete, go to definition, etc.
+/**
+ * Withdrawals Function
+ * Handles withdrawal history and creation
+ */
 
-// Setup type definitions for built-in Supabase Runtime APIs
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+import { Hono } from "jsr:@hono/hono";
+import { cors } from "jsr:@hono/hono/cors";
+
+// Config
+import { corsConfig } from "../../_shared/config/index.ts";
+
+// Middleware
 import {
-  extractClientInfo,
-  extractPinFromHeaders,
-  requirePinValidation,
-} from "../../_shared/pin-validation.ts";
-import {
-  extractBearerToken,
-  verifyDynamicJWT,
-  verifyPrivyJWT,
-} from "../../_shared/utils.ts";
+  dualAuthMiddleware,
+  errorMiddleware,
+  notFoundHandler,
+} from "../../_shared/middleware/index.ts";
 
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers":
-    "authorization, x-client-info, apikey, content-type, x-pin-code",
-  "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
-};
+// Services
+import { validateMerchant, requirePinValidation } from "../../_shared/services/merchant.service.ts";
 
-async function handleGetRequest(
-  supabase: any,
-  userProviderId: string,
-  isPrivyAuth: boolean,
-) {
-  try {
-    // Get merchant_id from the user's metadata or profile
-    const merchantQuery = supabase
-      .from("merchants")
-      .select("merchant_id, status");
+// Validators
+import { validateWithdrawalRequest } from "../../_shared/validators/order.validator.ts";
 
-    // Use appropriate column based on auth provider
-    const { data: merchantData, error: merchantError } = isPrivyAuth
-      ? await merchantQuery.eq("privy_id", userProviderId).single()
-      : await merchantQuery.eq("dynamic_id", userProviderId).single();
+// Utils
+import { extractPinFromHeaders } from "../../_shared/utils/helpers.ts";
 
-    if (merchantError || !merchantData) {
-      return Response.json(
-        { error: "Merchant not found" },
-        {
-          status: 404,
-          headers: corsHeaders,
-        },
-      );
-    }
+const app = new Hono().basePath("/withdrawals");
 
-    // Check merchant status (PIN_BLOCKED or INACTIVE)
-    if (merchantData.status === "PIN_BLOCKED") {
-      return Response.json(
-        {
-          error: "Account blocked due to PIN security violations",
-          code: "PIN_BLOCKED",
-        },
-        { status: 403, headers: corsHeaders },
-      );
-    }
+// Apply middleware
+app.use("*", cors(corsConfig));
+app.use("*", errorMiddleware);
+app.use("*", dualAuthMiddleware);
 
-    if (merchantData.status === "INACTIVE") {
-      return Response.json(
-        {
-          error: "Account is inactive",
-          code: "INACTIVE",
-        },
-        { status: 403, headers: corsHeaders },
-      );
-    }
+// ============================================================================
+// Route Handlers
+// ============================================================================
 
-    // Retrieve withdrawal histories for the merchant
-    const { data: withdrawals, error: withdrawalError } = await supabase
-      .from("withdrawals")
-      .select(
-        `
-        withdrawal_id,
-        recipient,
-        amount,
-        currency,
-        tx_hash,
-        created_at,
-        updated_at
-      `,
-      )
-      .eq("merchant_id", merchantData.merchant_id)
-      .order("created_at", { ascending: false });
+/**
+ * GET /withdrawals - Get withdrawal history
+ */
+app.get("/", async (c) => {
+  const supabase = c.get("supabase");
+  const userProviderId = c.get("dynamicId");
+  const isPrivyAuth = c.get("isPrivyAuth");
 
-    if (withdrawalError) {
-      return Response.json(
-        { error: "Failed to retrieve withdrawal histories" },
-        {
-          status: 500,
-          headers: corsHeaders,
-        },
-      );
-    }
-
-    return Response.json(
-      {
-        success: true,
-        data: withdrawals || [],
-        count: withdrawals?.length || 0,
-      },
-      {
-        status: 200,
-        headers: corsHeaders,
-      },
-    );
-  } catch (error) {
-    console.error("Error in handleGetRequest:", error);
-    return Response.json(
-      { error: "Internal server error" },
-      {
-        status: 500,
-        headers: corsHeaders,
-      },
+  // Validate merchant
+  const merchantResult = await validateMerchant(supabase, userProviderId, isPrivyAuth);
+  if (!merchantResult.success || !merchantResult.merchant) {
+    const status = merchantResult.code ? 403 : 404;
+    return c.json(
+      { success: false, error: merchantResult.error, code: merchantResult.code },
+      status,
     );
   }
-}
 
-async function handlePostRequest(
-  req: Request,
-  supabase: any,
-  userProviderId: string,
-  isPrivyAuth: boolean,
-) {
-  try {
-    // Get merchant_id from the user's metadata or profile
-    const merchantQuery = supabase
-      .from("merchants")
-      .select("merchant_id, status");
+  // Retrieve withdrawal histories
+  const { data: withdrawals, error } = await supabase
+    .from("withdrawals")
+    .select(`
+      withdrawal_id,
+      recipient,
+      amount,
+      currency,
+      tx_hash,
+      created_at,
+      updated_at
+    `)
+    .eq("merchant_id", merchantResult.merchant.merchant_id)
+    .order("created_at", { ascending: false });
 
-    // Use appropriate column based on auth provider
-    const { data: merchantData, error: merchantError } = isPrivyAuth
-      ? await merchantQuery.eq("privy_id", userProviderId).single()
-      : await merchantQuery.eq("dynamic_id", userProviderId).single();
-
-    if (merchantError || !merchantData) {
-      return Response.json(
-        { error: "Merchant not found" },
-        {
-          status: 404,
-          headers: corsHeaders,
-        },
-      );
-    }
-
-    // Check merchant status (PIN_BLOCKED or INACTIVE)
-    if (merchantData.status === "PIN_BLOCKED") {
-      return Response.json(
-        {
-          error: "Account blocked due to PIN security violations",
-          code: "PIN_BLOCKED",
-        },
-        { status: 403, headers: corsHeaders },
-      );
-    }
-
-    if (merchantData.status === "INACTIVE") {
-      return Response.json(
-        {
-          error: "Account is inactive",
-          code: "INACTIVE",
-        },
-        { status: 403, headers: corsHeaders },
-      );
-    }
-
-    // Parse request body
-    const body = await req.json();
-    const { recipient, amount, currency } = body;
-
-    // Validate required fields
-    if (!recipient || !amount || !currency) {
-      return Response.json(
-        { error: "Missing required fields: recipient, amount, currency" },
-        {
-          status: 400,
-          headers: corsHeaders,
-        },
-      );
-    }
-
-    // Validate amount is positive
-    if (typeof amount !== "number" || amount <= 0) {
-      return Response.json(
-        { error: "Amount must be a positive number" },
-        {
-          status: 400,
-          headers: corsHeaders,
-        },
-      );
-    }
-
-    // PIN validation for withdrawal (mandatory if PIN is set)
-    const pinCode = extractPinFromHeaders(req);
-    const { ipAddress, userAgent } = extractClientInfo(req);
-
-    // Check if merchant has PIN set by querying merchant data
-    const { data: merchantWithPin, error: pinError } = await supabase
-      .from("merchants")
-      .select("pin_code_hash")
-      .eq("merchant_id", merchantData.merchant_id)
-      .single();
-
-    if (!pinError && merchantWithPin && merchantWithPin.pin_code_hash) {
-      // PIN is required for withdrawals
-      if (!pinCode) {
-        return Response.json(
-          {
-            error: "PIN code is required for withdrawal operations",
-            code: "PIN_REQUIRED",
-          },
-          {
-            status: 400,
-            headers: corsHeaders,
-          },
-        );
-      }
-
-      // Validate PIN code
-      const pinValidation = await requirePinValidation({
-        supabase,
-        merchantId: merchantData.merchant_id,
-        pinCode,
-        ipAddress,
-        userAgent,
-      });
-
-      if (!pinValidation.success) {
-        return Response.json(
-          {
-            error: pinValidation.error,
-            attempts_remaining: pinValidation.result?.attempts_remaining,
-            is_blocked: pinValidation.result?.is_blocked,
-          },
-          {
-            status: 401,
-            headers: corsHeaders,
-          },
-        );
-      }
-    }
-
-    // Insert withdrawal record
-    const { data: withdrawal, error: withdrawalError } = await supabase
-      .from("withdrawals")
-      .insert({
-        merchant_id: merchantData.merchant_id,
-        recipient: recipient,
-        amount: amount,
-        currency: currency,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      })
-      .select()
-      .single();
-
-    if (withdrawalError) {
-      return Response.json(
-        { error: "Failed to create withdrawal request" },
-        {
-          status: 500,
-          headers: corsHeaders,
-        },
-      );
-    }
-
-    return Response.json(
-      {
-        success: true,
-        data: withdrawal,
-      },
-      {
-        status: 201,
-        headers: corsHeaders,
-      },
-    );
-  } catch (error) {
-    console.error("Error in handlePostRequest:", error);
-    return Response.json(
-      { error: "Internal server error" },
-      {
-        status: 500,
-        headers: corsHeaders,
-      },
-    );
-  }
-}
-
-Deno.serve(async (req) => {
-  if (req.method === "OPTIONS") {
-    return new Response("ok", { headers: corsHeaders });
+  if (error) {
+    return c.json({ success: false, error: "Failed to retrieve withdrawal histories" }, 500);
   }
 
-  try {
-    const DYNAMIC_ENV_ID = Deno.env.get("DYNAMIC_ENV_ID")!;
-    const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
-    const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+  return c.json({
+    success: true,
+    data: withdrawals || [],
+    count: withdrawals?.length || 0,
+  });
+});
 
-    // Privy Environment
-    const PRIVY_APP_ID = Deno.env.get("PRIVY_APP_ID")!;
-    const PRIVY_APP_SECRET = Deno.env.get("PRIVY_APP_SECRET")!;
+/**
+ * POST /withdrawals - Create withdrawal request
+ */
+app.post("/", async (c) => {
+  const supabase = c.get("supabase");
+  const userProviderId = c.get("dynamicId");
+  const isPrivyAuth = c.get("isPrivyAuth");
 
-    if (!DYNAMIC_ENV_ID || !SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
-      return Response.json(
-        { error: "Missing environment variables" },
-        {
-          status: 500,
-          headers: corsHeaders,
-        },
-      );
+  // Validate merchant
+  const merchantResult = await validateMerchant(supabase, userProviderId, isPrivyAuth);
+  if (!merchantResult.success || !merchantResult.merchant) {
+    const status = merchantResult.code ? 403 : 404;
+    return c.json(
+      { success: false, error: merchantResult.error, code: merchantResult.code },
+      status,
+    );
+  }
+
+  // Parse and validate request
+  const body = await c.req.json();
+  const validation = validateWithdrawalRequest(body);
+  if (!validation.success || !validation.data) {
+    return c.json({ success: false, error: validation.error }, 400);
+  }
+
+  const { recipient, amount, currency } = validation.data;
+
+  // Check if merchant has PIN set and validate
+  const { data: merchantWithPin } = await supabase
+    .from("merchants")
+    .select("pin_code_hash")
+    .eq("merchant_id", merchantResult.merchant.merchant_id)
+    .single();
+
+  if (merchantWithPin?.pin_code_hash) {
+    const pinCode = extractPinFromHeaders(c.req.raw);
+
+    if (!pinCode) {
+      return c.json({
+        success: false,
+        error: "PIN code is required for withdrawal operations",
+        code: "PIN_REQUIRED",
+      }, 400);
     }
 
-    const authHeader = req.headers.get("Authorization");
-    const token = extractBearerToken(authHeader);
+    const ipAddress = c.req.header("x-forwarded-for") || c.req.header("x-real-ip") || "unknown";
+    const userAgent = c.req.header("user-agent") || "unknown";
 
-    if (!token) {
-      return new Response(
-        JSON.stringify({ error: "Missing or invalid authorization header" }),
-        {
-          status: 401,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        },
-      );
-    }
-
-    // Verify with Privy
-    const privy = await verifyPrivyJWT(token, PRIVY_APP_ID, PRIVY_APP_SECRET);
-    // const tokenVerification = await verifyAuthToken(authHeader);
-    const tokenVerification = await verifyDynamicJWT(token, DYNAMIC_ENV_ID);
-    if (!tokenVerification.success) {
-      if (!privy.success) {
-        return Response.json(
-          {
-            error: "Invalid or expired token",
-            details: tokenVerification.error,
-          },
-          {
-            status: 401,
-            headers: corsHeaders,
-          },
-        );
-      }
-    }
-
-    let userProviderId = null;
-    let userProviderWalletAddress = null;
-    let isPrivyAuth = false;
-
-    if (tokenVerification.success) {
-      userProviderId = tokenVerification.payload.sub;
-      userProviderWalletAddress = tokenVerification.embedded_wallet_address;
-    }
-
-    if (privy.success) {
-      userProviderId = privy.payload?.id;
-      userProviderWalletAddress = privy.embedded_wallet_address;
-      isPrivyAuth = true;
-    }
-
-    if (!userProviderWalletAddress || !userProviderId) {
-      return Response.json(
-        {
-          error: "Missing embedded wallet address or user provider id",
-        },
-        {
-          status: 422,
-          headers: corsHeaders,
-        },
-      );
-    }
-
-    const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
-      auth: {
-        persistSession: false,
-        autoRefreshToken: false,
-      },
+    const pinValidation = await requirePinValidation({
+      supabase,
+      merchantId: merchantResult.merchant.merchant_id,
+      pinCode,
+      ipAddress,
+      userAgent,
     });
 
-    switch (req.method) {
-      case "GET":
-        return await handleGetRequest(supabase, userProviderId, isPrivyAuth);
-      case "POST":
-        return await handlePostRequest(
-          req,
-          supabase,
-          userProviderId,
-          isPrivyAuth,
-        );
-      default:
-        return Response.json(
-          { error: `Method ${req.method} not allowed` },
-          {
-            status: 405,
-            headers: corsHeaders,
-          },
-        );
+    if (!pinValidation.success) {
+      return c.json({
+        success: false,
+        error: pinValidation.error,
+        attempts_remaining: pinValidation.result?.attempts_remaining,
+        is_blocked: pinValidation.result?.is_blocked,
+      }, 401);
     }
-  } catch (error) {
-    console.error("Unhandled error:", error);
-    return Response.json(
-      { error: "Internal server error" },
-      {
-        status: 500,
-        headers: corsHeaders,
-      },
-    );
   }
+
+  // Insert withdrawal record
+  const { data: withdrawal, error } = await supabase
+    .from("withdrawals")
+    .insert({
+      merchant_id: merchantResult.merchant.merchant_id,
+      recipient,
+      amount,
+      currency,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    })
+    .select()
+    .single();
+
+  if (error) {
+    return c.json({ success: false, error: "Failed to create withdrawal request" }, 500);
+  }
+
+  return c.json({ success: true, data: withdrawal }, 201);
 });
+
+// Not found handler
+app.notFound(notFoundHandler);
+
+// Export for Deno
+Deno.serve(app.fetch);

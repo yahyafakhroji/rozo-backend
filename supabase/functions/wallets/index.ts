@@ -3,13 +3,19 @@ import { cors } from "@hono/hono/cors";
 import { PrivyClient } from "@privy-io/node";
 import { Buffer } from "node:buffer";
 import { encodeFunctionData, erc20Abi } from "viem";
-import { dualAuthMiddleware } from "../../_shared/dual-auth-middleware.ts";
-import {
-  extractClientInfo,
-  extractPinFromHeaders,
-  requirePinValidation,
-} from "../../_shared/pin-validation.ts";
-import { extractBearerToken } from "../../_shared/utils.ts";
+
+// Config
+import { corsConfig } from "../../_shared/config/index.ts";
+
+// Middleware
+import { dualAuthMiddleware } from "../../_shared/middleware/index.ts";
+
+// Services
+import { validateMerchant, requirePinValidation } from "../../_shared/services/merchant.service.ts";
+
+// Utils
+import { extractPinFromHeaders, extractClientInfo } from "../../_shared/utils/helpers.ts";
+import { extractBearerToken } from "../../_shared/utils/jwt.utils.ts";
 import { submitSignedPaymentTx } from "./transfer.ts";
 import {
   getStellarErrorMessage as getStellarError,
@@ -636,22 +642,7 @@ async function handleTransactions(c: Context, walletId: string) {
 }
 
 // Configure CORS
-app.use(
-  "*",
-  cors({
-    origin: "*",
-    allowHeaders: [
-      "authorization",
-      "x-client-info",
-      "apikey",
-      "content-type",
-      "x-pin-code",
-    ],
-    allowMethods: ["POST", "GET", "OPTIONS"],
-  }),
-);
-
-app.options("*", (c) => c.text("ok"));
+app.use("*", cors(corsConfig));
 
 // Set Middleware
 app.use(dualAuthMiddleware);

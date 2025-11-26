@@ -1,12 +1,25 @@
-import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+/**
+ * Expired Orders Cron Job
+ * Handles expired orders by updating their status to EXPIRED
+ */
 
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers":
-    "authorization, x-client-info, apikey, content-type",
-  "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
-};
+import { Hono } from "jsr:@hono/hono";
+import { cors } from "jsr:@hono/hono/cors";
+
+// Config
+import { corsConfig, PaymentStatus } from "../../_shared/config/index.ts";
+
+// Utils
+import { createSupabaseClient } from "../../_shared/utils/supabase.utils.ts";
+
+const app = new Hono().basePath("/expired-orders");
+
+// Apply CORS
+app.use("*", cors(corsConfig));
+
+// ============================================================================
+// Types
+// ============================================================================
 
 interface ExpiredOrderStats {
   totalExpired: number;
@@ -15,11 +28,14 @@ interface ExpiredOrderStats {
   processingTimeMs: number;
 }
 
+// ============================================================================
+// Helper Functions
+// ============================================================================
+
 /**
- * Handle expired orders by updating their status to FAILED
- * This function should be called by a cron job every minute
+ * Handle expired orders by updating their status to EXPIRED
  */
-async function handleExpiredOrders(supabase: any): Promise<ExpiredOrderStats> {
+async function handleExpiredOrders(supabase: ReturnType<typeof createSupabaseClient>): Promise<ExpiredOrderStats> {
   const startTime = Date.now();
   const stats: ExpiredOrderStats = {
     totalExpired: 0,
@@ -36,13 +52,11 @@ async function handleExpiredOrders(supabase: any): Promise<ExpiredOrderStats> {
     const { data: updatedOrders, error: updateError } = await supabase
       .from("orders")
       .update({
-        status: "EXPIRED",
+        status: PaymentStatus.EXPIRED,
         updated_at: now,
       })
-      .eq("status", "PENDING")
-      .or(
-        `expired_at.lt.${now},and(expired_at.is.null,created_at.lt.${tenMinutesAgo})`,
-      )
+      .eq("status", PaymentStatus.PENDING)
+      .or(`expired_at.lt.${now},and(expired_at.is.null,created_at.lt.${tenMinutesAgo})`)
       .select("order_id, number");
 
     if (updateError) {
@@ -57,9 +71,7 @@ async function handleExpiredOrders(supabase: any): Promise<ExpiredOrderStats> {
     if (stats.totalExpired > 0) {
       console.log(
         `Updated ${stats.totalExpired} expired orders:`,
-        updatedOrders?.map((order: { number: string }) => order.number).join(
-          ", ",
-        ),
+        updatedOrders?.map((order: { number: string }) => order.number).join(", "),
       );
     } else {
       console.log("No expired orders found");
@@ -74,175 +86,65 @@ async function handleExpiredOrders(supabase: any): Promise<ExpiredOrderStats> {
   return stats;
 }
 
+// ============================================================================
+// Route Handlers
+// ============================================================================
+
 /**
- * Notify merchants about their expired orders
+ * GET /expired-orders/health - Health check
  */
-async function notifyMerchantsAboutExpiredOrders(
-  supabase: any,
-  expiredOrders: Array<{ order_id: string; number: string }>,
-): Promise<void> {
+app.get("/health", (c) => {
+  return c.json({
+    success: true,
+    message: "Expired orders cron is running",
+    timestamp: new Date().toISOString(),
+  });
+});
+
+/**
+ * POST /expired-orders/trigger - Manual trigger for testing
+ */
+app.post("/trigger", async (c) => {
   try {
-    // Group orders by merchant_id
-    const merchantOrders = new Map<string, string[]>();
-
-    for (const order of expiredOrders) {
-      const { data: orderData } = await supabase
-        .from("orders")
-        .select("merchant_id")
-        .eq("order_id", order.order_id)
-        .single();
-
-      if (orderData) {
-        const merchantId = orderData.merchant_id;
-        if (!merchantOrders.has(merchantId)) {
-          merchantOrders.set(merchantId, []);
-        }
-        merchantOrders.get(merchantId)!.push(order.number);
-      }
-    }
-
-    // Send notifications (placeholder for actual notification service)
-    for (const [merchantId, orderNumbers] of merchantOrders) {
-      console.log(
-        `Merchant ${merchantId} has ${orderNumbers.length} expired orders: ${
-          orderNumbers.join(", ")
-        }`,
-      );
-
-      // TODO: Implement actual notification sending
-      // await pushNotification(merchantId, "orders_expired", {
-      //   message: `${orderNumbers.length} orders have expired`,
-      //   order_numbers: orderNumbers,
-      // });
-    }
-  } catch (error) {
-    console.error("Error notifying merchants about expired orders:", error);
-  }
-}
-
-/**
- * Health check endpoint
- */
-async function handleHealthCheck(): Promise<Response> {
-  return Response.json(
-    {
-      success: true,
-      message: "Expired orders cron is running",
-      timestamp: new Date().toISOString(),
-    },
-    {
-      status: 200,
-      headers: corsHeaders,
-    },
-  );
-}
-
-/**
- * Manual trigger endpoint for testing
- */
-async function handleManualTrigger(supabase: any): Promise<Response> {
-  try {
+    const supabase = createSupabaseClient();
     const stats = await handleExpiredOrders(supabase);
 
-    return Response.json(
-      {
-        success: true,
-        message: "Expired orders processed manually",
-        stats,
-      },
-      {
-        status: 200,
-        headers: corsHeaders,
-      },
-    );
-  } catch (error) {
-    return Response.json(
-      {
-        success: false,
-        error: error instanceof Error ? error.message : "Unknown error",
-      },
-      {
-        status: 500,
-        headers: corsHeaders,
-      },
-    );
-  }
-}
-
-// Main serve function
-serve(async (req) => {
-  if (req.method === "OPTIONS") {
-    return new Response("ok", { headers: corsHeaders });
-  }
-
-  try {
-    const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
-    const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get(
-      "SUPABASE_SERVICE_ROLE_KEY",
-    )!;
-
-    if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
-      return Response.json(
-        { error: "Missing environment variables" },
-        {
-          status: 500,
-          headers: corsHeaders,
-        },
-      );
-    }
-
-    const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
-      auth: {
-        persistSession: false,
-        autoRefreshToken: false,
-      },
+    return c.json({
+      success: true,
+      message: "Expired orders processed manually",
+      stats,
     });
-    const url = new URL(req.url);
-    const pathSegments = url.pathname.split("/").filter(Boolean);
-
-    // Route: GET /health - Health check
-    if (req.method === "GET" && pathSegments[0] === "health") {
-      return await handleHealthCheck();
-    }
-
-    // Route: POST /trigger - Manual trigger for testing
-    if (req.method === "POST" && pathSegments[0] === "trigger") {
-      return await handleManualTrigger(supabase);
-    }
-
-    // Route: POST / - Cron job endpoint (default)
-    if (req.method === "POST") {
-      const stats = await handleExpiredOrders(supabase);
-
-      return Response.json(
-        {
-          success: true,
-          message: "Expired orders processed",
-          stats,
-        },
-        {
-          status: 200,
-          headers: corsHeaders,
-        },
-      );
-    }
-
-    // Route not found
-    return Response.json(
-      { error: "Route not found" },
-      {
-        status: 404,
-        headers: corsHeaders,
-      },
-    );
   } catch (error) {
-    console.error("Unhandled error:", error);
-    return Response.json(
-      { error: "Internal server error" },
-      {
-        status: 500,
-        headers: corsHeaders,
-      },
-    );
+    return c.json({
+      success: false,
+      error: error instanceof Error ? error.message : "Unknown error",
+    }, 500);
   }
 });
+
+/**
+ * POST /expired-orders - Cron job endpoint (default)
+ */
+app.post("/", async (c) => {
+  try {
+    const supabase = createSupabaseClient();
+    const stats = await handleExpiredOrders(supabase);
+
+    return c.json({
+      success: true,
+      message: "Expired orders processed",
+      stats,
+    });
+  } catch (error) {
+    return c.json({
+      success: false,
+      error: error instanceof Error ? error.message : "Unknown error",
+    }, 500);
+  }
+});
+
+// Not found handler
+app.notFound((c) => c.json({ error: "Route not found" }, 404));
+
+// Export for Deno
+Deno.serve(app.fetch);
