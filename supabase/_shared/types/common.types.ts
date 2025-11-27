@@ -58,6 +58,21 @@ export interface MerchantStatus {
 }
 
 // ============================================================================
+// Chain Types
+// ============================================================================
+
+export interface ChainData {
+  chain_id: string;
+  name: string;
+  chain_type: "evm" | "stellar" | "solana";
+  icon_url?: string | null;
+  explorer_url?: string | null;
+  is_active: boolean;
+  created_at?: string;
+  updated_at?: string;
+}
+
+// ============================================================================
 // Token Types
 // ============================================================================
 
@@ -67,6 +82,50 @@ export interface TokenData {
   token_address: string;
   chain_id: string;
   chain_name: string;
+  icon_url?: string | null;
+  is_active?: boolean;
+  decimals?: number;
+}
+
+// ============================================================================
+// Merchant Wallet Types
+// ============================================================================
+
+export type WalletSource = "privy" | "manual";
+
+export interface MerchantWalletData {
+  wallet_id: string;
+  merchant_id: string;
+  chain_id: string;
+  address: string;
+  label?: string | null;
+  source: WalletSource;
+  is_primary: boolean;
+  is_verified: boolean;
+  created_at?: string;
+  updated_at?: string;
+  // Joined data
+  chain?: ChainData;
+}
+
+export interface AddMerchantWalletRequest {
+  chain_id: string;
+  address: string;
+  label?: string;
+  source?: WalletSource;
+  is_primary?: boolean;
+}
+
+export interface UpdateMerchantWalletRequest {
+  label?: string;
+  is_primary?: boolean;
+}
+
+export interface MerchantWalletResult {
+  success: boolean;
+  wallet?: MerchantWalletData;
+  wallets?: MerchantWalletData[];
+  error?: string;
 }
 
 // ============================================================================

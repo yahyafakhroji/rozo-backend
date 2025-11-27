@@ -136,6 +136,39 @@ export type Database = {
           },
         ]
       }
+      chains: {
+        Row: {
+          chain_id: string
+          name: string
+          chain_type: string
+          icon_url: string | null
+          explorer_url: string | null
+          is_active: boolean
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          chain_id: string
+          name: string
+          chain_type: string
+          icon_url?: string | null
+          explorer_url?: string | null
+          is_active?: boolean
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          chain_id?: string
+          name?: string
+          chain_type?: string
+          icon_url?: string | null
+          explorer_url?: string | null
+          is_active?: boolean
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       languages: {
         Row: {
           display_name: string
@@ -215,6 +248,60 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "tokens"
             referencedColumns: ["token_id"]
+          },
+        ]
+      }
+      merchant_wallets: {
+        Row: {
+          wallet_id: string
+          merchant_id: string
+          chain_id: string
+          address: string
+          label: string | null
+          source: string
+          is_primary: boolean
+          is_verified: boolean
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          wallet_id?: string
+          merchant_id: string
+          chain_id: string
+          address: string
+          label?: string | null
+          source?: string
+          is_primary?: boolean
+          is_verified?: boolean
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          wallet_id?: string
+          merchant_id?: string
+          chain_id?: string
+          address?: string
+          label?: string | null
+          source?: string
+          is_primary?: boolean
+          is_verified?: boolean
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "merchant_wallets_merchant_id_fkey"
+            columns: ["merchant_id"]
+            isOneToOne: false
+            referencedRelation: "merchants"
+            referencedColumns: ["merchant_id"]
+          },
+          {
+            foreignKeyName: "merchant_wallets_chain_id_fkey"
+            columns: ["chain_id"]
+            isOneToOne: false
+            referencedRelation: "chains"
+            referencedColumns: ["chain_id"]
           },
         ]
       }
@@ -299,6 +386,11 @@ export type Database = {
           token_address: string
           token_id: string
           token_name: string
+          icon_url: string | null
+          is_active: boolean
+          decimals: number
+          created_at: string | null
+          updated_at: string | null
         }
         Insert: {
           chain_id: string
@@ -306,6 +398,11 @@ export type Database = {
           token_address: string
           token_id: string
           token_name: string
+          icon_url?: string | null
+          is_active?: boolean
+          decimals?: number
+          created_at?: string | null
+          updated_at?: string | null
         }
         Update: {
           chain_id?: string
@@ -313,8 +410,21 @@ export type Database = {
           token_address?: string
           token_id?: string
           token_name?: string
+          icon_url?: string | null
+          is_active?: boolean
+          decimals?: number
+          created_at?: string | null
+          updated_at?: string | null
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "tokens_chain_id_fkey"
+            columns: ["chain_id"]
+            isOneToOne: false
+            referencedRelation: "chains"
+            referencedColumns: ["chain_id"]
+          },
+        ]
       }
       withdrawals: {
         Row: {

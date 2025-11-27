@@ -27,6 +27,16 @@ import {
   validatePinCode,
 } from "../../_shared/services/merchant.service.ts";
 import {
+  getMerchantWallets,
+  getWalletById,
+  addMerchantWallet,
+  updateMerchantWallet,
+  deleteMerchantWallet,
+  setWalletAsPrimary,
+  getActiveChains,
+  syncPrivyWallet,
+} from "../../_shared/services/wallet.service.ts";
+import {
   logPinOperation,
   AuditAction,
 } from "../../_shared/services/audit.service.ts";
@@ -407,6 +417,175 @@ app.post("/pin/validate", privyAuthMiddleware, merchantResolverMiddleware, async
     },
     result.success ? 200 : 401,
   );
+});
+
+// ============================================================================
+// Wallet Management Routes
+// ============================================================================
+
+/**
+ * GET /merchants/chains - Get available chains
+ */
+app.get("/chains", privyAuthMiddleware, async (c) => {
+  const supabase = c.get("supabase") as TypedSupabaseClient;
+
+  const result = await getActiveChains(supabase);
+
+  if (!result.success) {
+    return c.json({ success: false, error: result.error }, 500);
+  }
+
+  return c.json({ success: true, chains: result.chains });
+});
+
+/**
+ * GET /merchants/wallets - Get all merchant wallets
+ */
+app.get("/wallets", privyAuthMiddleware, merchantResolverMiddleware, async (c) => {
+  const supabase = c.get("supabase") as TypedSupabaseClient;
+  const merchant = getMerchantFromContext(c);
+
+  const result = await getMerchantWallets(supabase, merchant.merchant_id);
+
+  if (!result.success) {
+    return c.json({ success: false, error: result.error }, 500);
+  }
+
+  return c.json({ success: true, wallets: result.wallets });
+});
+
+/**
+ * GET /merchants/wallets/:walletId - Get wallet by ID
+ */
+app.get("/wallets/:walletId", privyAuthMiddleware, merchantResolverMiddleware, async (c) => {
+  const supabase = c.get("supabase") as TypedSupabaseClient;
+  const merchant = getMerchantFromContext(c);
+  const walletId = c.req.param("walletId");
+
+  const result = await getWalletById(supabase, walletId, merchant.merchant_id);
+
+  if (!result.success) {
+    return c.json({ success: false, error: result.error }, 404);
+  }
+
+  return c.json({ success: true, wallet: result.wallet });
+});
+
+/**
+ * POST /merchants/wallets - Add a new wallet
+ */
+app.post("/wallets", privyAuthMiddleware, merchantResolverMiddleware, async (c) => {
+  const supabase = c.get("supabase") as TypedSupabaseClient;
+  const merchant = getMerchantFromContext(c);
+
+  const body = await c.req.json().catch(() => ({}));
+
+  // Validate required fields
+  if (!body.chain_id || !body.address) {
+    return c.json({
+      success: false,
+      error: "chain_id and address are required",
+    }, 400);
+  }
+
+  const result = await addMerchantWallet(supabase, merchant.merchant_id, {
+    chain_id: body.chain_id,
+    address: body.address,
+    label: body.label,
+    source: body.source || "manual",
+    is_primary: body.is_primary,
+  });
+
+  if (!result.success) {
+    return c.json({ success: false, error: result.error }, 400);
+  }
+
+  return c.json({ success: true, wallet: result.wallet }, 201);
+});
+
+/**
+ * PUT /merchants/wallets/:walletId - Update a wallet
+ */
+app.put("/wallets/:walletId", privyAuthMiddleware, merchantResolverMiddleware, async (c) => {
+  const supabase = c.get("supabase") as TypedSupabaseClient;
+  const merchant = getMerchantFromContext(c);
+  const walletId = c.req.param("walletId");
+
+  const body = await c.req.json().catch(() => ({}));
+
+  const result = await updateMerchantWallet(supabase, walletId, merchant.merchant_id, {
+    label: body.label,
+    is_primary: body.is_primary,
+  });
+
+  if (!result.success) {
+    return c.json({ success: false, error: result.error }, 400);
+  }
+
+  return c.json({ success: true, wallet: result.wallet });
+});
+
+/**
+ * PUT /merchants/wallets/:walletId/primary - Set wallet as primary
+ */
+app.put("/wallets/:walletId/primary", privyAuthMiddleware, merchantResolverMiddleware, async (c) => {
+  const supabase = c.get("supabase") as TypedSupabaseClient;
+  const merchant = getMerchantFromContext(c);
+  const walletId = c.req.param("walletId");
+
+  const result = await setWalletAsPrimary(supabase, walletId, merchant.merchant_id);
+
+  if (!result.success) {
+    return c.json({ success: false, error: result.error }, 400);
+  }
+
+  return c.json({
+    success: true,
+    wallet: result.wallet,
+    message: "Wallet set as primary successfully",
+  });
+});
+
+/**
+ * DELETE /merchants/wallets/:walletId - Delete a wallet
+ */
+app.delete("/wallets/:walletId", privyAuthMiddleware, merchantResolverMiddleware, async (c) => {
+  const supabase = c.get("supabase") as TypedSupabaseClient;
+  const merchant = getMerchantFromContext(c);
+  const walletId = c.req.param("walletId");
+
+  const result = await deleteMerchantWallet(supabase, walletId, merchant.merchant_id);
+
+  if (!result.success) {
+    return c.json({ success: false, error: result.error }, 400);
+  }
+
+  return c.json({ success: true, message: "Wallet deleted successfully" });
+});
+
+/**
+ * POST /merchants/wallets/sync - Sync Privy wallet to merchant_wallets
+ * Called after login to ensure Privy wallet is in the new wallet system
+ */
+app.post("/wallets/sync", privyAuthMiddleware, merchantResolverMiddleware, async (c) => {
+  const supabase = c.get("supabase") as TypedSupabaseClient;
+  const merchant = getMerchantFromContext(c);
+  const walletAddress = c.get("walletAddress") as string;
+
+  const body = await c.req.json().catch(() => ({}));
+  const chainId = body.chain_id || "8453"; // Default to Base
+
+  const result = await syncPrivyWallet(supabase, merchant.merchant_id, walletAddress, chainId);
+
+  if (!result.success) {
+    return c.json({ success: false, error: result.error }, 400);
+  }
+
+  return c.json({
+    success: true,
+    wallet: result.wallet,
+    message: "Privy wallet synced successfully",
+  });
 });
 
 // Not found handler

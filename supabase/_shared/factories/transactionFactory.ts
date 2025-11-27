@@ -11,6 +11,7 @@ import type {
   TypedSupabaseClient,
 } from "../types/common.types.ts";
 import { resolvePreferredToken, getDestinationAddress } from "../services/merchant.service.ts";
+import { getDestinationWalletAddress } from "../services/wallet.service.ts";
 import { convertCurrencyToUSD } from "../services/currency.service.ts";
 import { createOrderPaymentLink, createDepositPaymentLink } from "../services/payment.service.ts";
 import { generateOrderNumber } from "../utils/helpers.ts";
