@@ -6,3 +6,4 @@ export * from "./auth.middleware.ts";
 export * from "./error.middleware.ts";
 export * from "./logging.middleware.ts";
 export * from "./pin.middleware.ts";
+export * from "./merchantResolver.middleware.ts";

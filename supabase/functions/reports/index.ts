@@ -1,6 +1,7 @@
 /**
  * Reports Function
  * Handles merchant dashboard reporting
+ * Refactored to use new middleware and type-safe utilities
  */
 
 import { Hono } from "jsr:@hono/hono";
@@ -14,23 +15,29 @@ import {
   dualAuthMiddleware,
   errorMiddleware,
   notFoundHandler,
+  merchantResolverMiddleware,
+  getMerchantFromContext,
 } from "../../_shared/middleware/index.ts";
 
-// Services
-import { validateMerchant } from "../../_shared/services/merchant.service.ts";
+// Schemas
+import {
+  ReportRequestSchema,
+  safeParseBody,
+} from "../../_shared/schemas/index.ts";
 
-// Validators
-import { validateDateRange, validateGroupBy } from "../../_shared/validators/common.validator.ts";
+// Types
+import type { TypedSupabaseClient } from "../../_shared/types/common.types.ts";
 
 // Local report utilities
-import { generateDashboardReport } from "./utils.ts";
+import { generateDashboardReport, getQuickStats } from "./utils.ts";
 
 const app = new Hono().basePath("/reports");
 
-// Apply middleware
+// Apply middleware stack
 app.use("*", cors(corsConfig));
 app.use("*", errorMiddleware);
 app.use("*", dualAuthMiddleware);
+app.use("*", merchantResolverMiddleware);
 
 // ============================================================================
 // Route Handlers
@@ -40,47 +47,47 @@ app.use("*", dualAuthMiddleware);
  * GET /reports - Get dashboard report
  */
 app.get("/", async (c) => {
-  const supabase = c.get("supabase");
-  const userProviderId = c.get("dynamicId");
-  const isPrivyAuth = c.get("isPrivyAuth");
-
-  // Validate merchant
-  const merchantResult = await validateMerchant(supabase, userProviderId, isPrivyAuth);
-  if (!merchantResult.success || !merchantResult.merchant) {
-    const status = merchantResult.code ? 403 : 404;
-    return c.json(
-      { success: false, error: merchantResult.error, code: merchantResult.code },
-      status,
-    );
-  }
+  const supabase = c.get("supabase") as TypedSupabaseClient;
+  const merchant = getMerchantFromContext(c);
 
   // Parse query parameters
   const from = c.req.query("from");
   const to = c.req.query("to");
-  const groupByParam = c.req.query("group_by");
+  const groupBy = c.req.query("group_by");
 
-  // Validate date range
-  const dateValidation = validateDateRange(from ?? null, to ?? null);
-  if (!dateValidation.success) {
-    return c.json({ success: false, error: dateValidation.error }, 400);
-  }
+  // Validate with Zod schema
+  const validation = safeParseBody(ReportRequestSchema, {
+    from,
+    to,
+    group_by: groupBy,
+  });
 
-  // Validate group_by parameter
-  const groupByValidation = validateGroupBy(groupByParam ?? null);
-  if (!groupByValidation.success) {
-    return c.json({ success: false, error: groupByValidation.error }, 400);
+  if (!validation.success) {
+    return c.json({ success: false, error: validation.error }, 400);
   }
 
   // Generate report
   const result = await generateDashboardReport(
     supabase,
-    merchantResult.merchant.merchant_id,
-    {
-      from: dateValidation.from!,
-      to: dateValidation.to!,
-      group_by: groupByValidation.groupBy,
-    },
+    merchant.merchant_id,
+    validation.data,
   );
+
+  if (!result.success) {
+    return c.json({ success: false, error: result.error }, 400);
+  }
+
+  return c.json({ success: true, data: result.data });
+});
+
+/**
+ * GET /reports/quick-stats - Get quick summary stats
+ */
+app.get("/quick-stats", async (c) => {
+  const supabase = c.get("supabase") as TypedSupabaseClient;
+  const merchant = getMerchantFromContext(c);
+
+  const result = await getQuickStats(supabase, merchant.merchant_id);
 
   if (!result.success) {
     return c.json({ success: false, error: result.error }, 400);

@@ -68,6 +68,9 @@ export async function createDaimoPaymentLink(
       };
     }
 
+    // Get callback URL from configuration
+    const callbackUrl = CONSTANTS.API.PAYMENT_CALLBACK_URL;
+
     // Construct payment request
     const paymentRequest = {
       appId: "rozoApp",
@@ -98,14 +101,12 @@ export async function createDaimoPaymentLink(
         orderDate: new Date().toISOString(),
         merchantToken: destinationAddress || "",
         forMerchant: true,
-        callbackUrl:
-          "https://iufqieirueyalyxfzszh.supabase.co/functions/v1/payment-callback",
+        callbackUrl,
       },
       preferredChain: preferredToken.chain_id,
       preferredToken: preferredToken.token_name,
       preferredTokenAddress: preferredToken.token_address,
-      callbackUrl:
-        "https://iufqieirueyalyxfzszh.supabase.co/functions/v1/payment-callback",
+      callbackUrl,
     };
 
     // Make API request to Daimo Pay
@@ -254,10 +255,7 @@ export async function createDepositPaymentLink(
 /**
  * Get QR code URL for payment
  */
-export function getPaymentQrCodeUrl(paymentId: string): string | null {
-  const rozoPayUrl = Deno.env.get("ROZO_PAY_URL");
-  if (!rozoPayUrl) {
-    return null;
-  }
+export function getPaymentQrCodeUrl(paymentId: string): string {
+  const rozoPayUrl = CONSTANTS.API.ROZO_PAY_URL;
   return `${rozoPayUrl}${paymentId}`;
 }
