@@ -6,8 +6,8 @@ This document covers development patterns, coding standards, testing procedures,
 
 ### Function Development Patterns
 
-1. **Authentication**: Always use dual auth pattern (Privy → Dynamic fallback)
-2. **Database Queries**: Use OR logic for merchant lookups with both ID types
+1. **Authentication**: Use Privy authentication middleware
+2. **Database Queries**: Query merchants by `privy_id`
 3. **Error Handling**: Consistent error response structure across all functions
 4. **CORS**: All functions include proper CORS headers
 5. **TypeScript**: Strict typing with proper interfaces
@@ -20,7 +20,7 @@ This document covers development patterns, coding standards, testing procedures,
 ### Authentication Pattern
 
 ```typescript
-// Standard dual authentication pattern
+// Privy authentication pattern
 const authHeader = req.headers.get("Authorization");
 const token = extractBearerToken(authHeader);
 
@@ -31,39 +31,29 @@ if (!token) {
   );
 }
 
-// Verify with Privy first
+// Verify with Privy
 const privy = await verifyPrivyJWT(token, PRIVY_APP_ID, PRIVY_APP_SECRET);
 
-// Fallback to Dynamic
-const tokenVerification = await verifyDynamicJWT(token, DYNAMIC_ENV_ID);
-
-if (!tokenVerification.success && !privy.success) {
+if (!privy.success) {
   return Response.json(
     { error: "Invalid or expired token" },
     { status: 401, headers: corsHeaders }
   );
 }
 
-let userProviderId = null;
-let isPrivyAuth = false;
-
-if (tokenVerification.success) {
-  userProviderId = tokenVerification.payload.sub;
-}
-
-if (privy.success) {
-  userProviderId = privy.payload?.id;
-  isPrivyAuth = true;
-}
+const privyId = privy.payload?.id;
+const walletAddress = privy.embedded_wallet_address;
 ```
 
 ### Database Query Pattern
 
 ```typescript
-// Use appropriate column based on auth provider
-const { data: merchant, error: merchantError } = isPrivyAuth
-  ? await merchantQuery.eq("privy_id", userProviderId).single()
-  : await merchantQuery.eq("dynamic_id", userProviderId).single();
+// Query merchant by Privy ID
+const { data: merchant, error: merchantError } = await supabase
+  .from("merchants")
+  .select("*")
+  .eq("privy_id", privyId)
+  .single();
 ```
 
 ### Error Handling Pattern
@@ -176,10 +166,6 @@ curl -X GET "http://localhost:54321/functions/v1/expired-orders/health"
 curl -X GET "http://localhost:54321/functions/v1/merchants" \
   -H "Authorization: Bearer <privy-jwt-token>"
 
-# Test with Dynamic token
-curl -X GET "http://localhost:54321/functions/v1/merchants" \
-  -H "Authorization: Bearer <dynamic-jwt-token>"
-
 # Test invalid token
 curl -X GET "http://localhost:54321/functions/v1/merchants" \
   -H "Authorization: Bearer invalid-token"
@@ -257,11 +243,14 @@ RESET ALL;
 
 ## Function Development
 
-### Standard Function Structure
+### Standard Function Structure (Legacy)
+
+> **Note**: This pattern is deprecated. Use the Hono function structure instead.
 
 ```typescript
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { verifyPrivyJWT, extractBearerToken } from "../_shared/utils/jwt.utils.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -270,20 +259,17 @@ const corsHeaders = {
   "Access-Control-Allow-Methods": "POST, GET, PUT, OPTIONS",
 };
 
-// Main serve function
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
   }
 
   try {
-    // Environment variables
     const ROZO_SUPABASE_URL = Deno.env.get("ROZO_SUPABASE_URL")!;
-    const ROZO_SUPABASE_SERVICE_ROLE_KEY = Deno.env.get(
-      "ROZO_SUPABASE_SERVICE_ROLE_KEY"
-    )!;
+    const ROZO_SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("ROZO_SUPABASE_SERVICE_ROLE_KEY")!;
+    const PRIVY_APP_ID = Deno.env.get("PRIVY_APP_ID")!;
+    const PRIVY_APP_SECRET = Deno.env.get("PRIVY_APP_SECRET")!;
 
-    // Authentication logic
     const authHeader = req.headers.get("Authorization");
     const token = extractBearerToken(authHeader);
 
@@ -294,53 +280,22 @@ serve(async (req) => {
       );
     }
 
-    // Dual authentication
+    // Privy authentication
     const privy = await verifyPrivyJWT(token, PRIVY_APP_ID, PRIVY_APP_SECRET);
-    const tokenVerification = await verifyDynamicJWT(token, DYNAMIC_ENV_ID);
 
-    if (!tokenVerification.success && !privy.success) {
+    if (!privy.success) {
       return Response.json(
         { error: "Invalid or expired token" },
         { status: 401, headers: corsHeaders }
       );
     }
 
-    let userProviderId = null;
-    let isPrivyAuth = false;
+    const privyId = privy.payload?.id;
+    const walletAddress = privy.embedded_wallet_address;
 
-    if (tokenVerification.success) {
-      userProviderId = tokenVerification.payload.sub;
-    }
+    const supabase = createClient(ROZO_SUPABASE_URL, ROZO_SUPABASE_SERVICE_ROLE_KEY);
 
-    if (privy.success) {
-      userProviderId = privy.payload?.id;
-      isPrivyAuth = true;
-    }
-
-    const supabase = createClient(
-      ROZO_SUPABASE_URL,
-      ROZO_SUPABASE_SERVICE_ROLE_KEY
-    );
-
-    // Route handling
-    const url = new URL(req.url);
-    const pathSegments = url.pathname.split("/").filter(Boolean);
-
-    // Route: POST / - Main endpoint
-    if (req.method === "POST") {
-      return await handleMainEndpoint(
-        req,
-        supabase,
-        userProviderId,
-        isPrivyAuth
-      );
-    }
-
-    // Route not found
-    return Response.json(
-      { error: "Route not found" },
-      { status: 404, headers: corsHeaders }
-    );
+    // Route handling...
   } catch (error) {
     console.error("Unhandled error:", error);
     return Response.json(
@@ -354,30 +309,28 @@ serve(async (req) => {
 ### Hono Function Structure
 
 ```typescript
-import { Hono } from "https://deno.land/x/hono@v3.12.8/mod.ts";
-import { cors } from "https://deno.land/x/hono@v3.12.8/middleware.ts";
-import { dualAuthMiddleware } from "../../_shared/dual-auth-middleware.ts";
+import { Hono } from "jsr:@hono/hono";
+import { cors } from "jsr:@hono/hono/cors";
+import {
+  privyAuthMiddleware,
+  errorMiddleware,
+  merchantResolverMiddleware,
+} from "../../_shared/middleware/index.ts";
+import { corsConfig } from "../../_shared/config/index.ts";
 
 const app = new Hono().basePath(`/deposits`);
 
-// Configure CORS
-app.use(
-  "*",
-  cors({
-    origin: "*",
-    allowHeaders: ["authorization", "x-client-info", "apikey", "content-type"],
-    allowMethods: ["POST", "GET", "PUT", "OPTIONS"],
-  })
-);
-
-// Use dual auth middleware
-app.use(dualAuthMiddleware);
+// Apply middleware stack
+app.use("*", cors(corsConfig));
+app.use("*", errorMiddleware);
+app.use("*", privyAuthMiddleware);
+app.use("*", merchantResolverMiddleware);
 
 // Routes
 app.post("/", handleCreate);
 app.get("/", handleGetAll);
 
-export default app;
+Deno.serve(app.fetch);
 ```
 
 ## Performance Best Practices
@@ -419,7 +372,7 @@ try {
 ```typescript
 // Use parallel operations where possible
 const [merchantResult, conversionResult] = await Promise.all([
-  validateMerchant(supabase, userProviderId, isPrivyAuth),
+  validateMerchant(supabase, privyId),
   convertCurrencyToUSD(supabase, currency, amount),
 ]);
 
@@ -490,9 +443,10 @@ if (merchant.status === "INACTIVE") {
 # Required environment variables
 ROZO_SUPABASE_URL=your_supabase_url
 ROZO_SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
-DYNAMIC_ENV_ID=your_dynamic_env_id
 PRIVY_APP_ID=your_privy_app_id
 PRIVY_APP_SECRET=your_privy_app_secret
+PRIVY_POLICY_ID=your_privy_policy_id
+PRIVY_AUTHORIZATION_PRIVATE_KEY=your_privy_auth_key
 DAIMO_API_KEY=your_daimo_api_key
 PUSHER_APP_ID=your_pusher_app_id
 PUSHER_KEY=your_pusher_key
@@ -539,14 +493,14 @@ curl -X POST "https://your-project.supabase.co/functions/v1/expired-orders/trigg
 
 ```typescript
 // Enable detailed logging
-console.log("Debug info:", { userProviderId, isPrivyAuth, merchantId });
+console.log("Debug info:", { privyId, walletAddress, merchantId });
 
 // Check environment variables
 console.log("Environment check:", {
   hasSupabaseUrl: !!Deno.env.get("ROZO_SUPABASE_URL"),
   hasServiceKey: !!Deno.env.get("ROZO_SUPABASE_SERVICE_ROLE_KEY"),
-  hasDynamicId: !!Deno.env.get("DYNAMIC_ENV_ID"),
   hasPrivyId: !!Deno.env.get("PRIVY_APP_ID"),
+  hasPrivySecret: !!Deno.env.get("PRIVY_APP_SECRET"),
 });
 ```
 
@@ -559,8 +513,8 @@ catch (error) {
     message: error.message,
     stack: error.stack,
     timestamp: new Date().toISOString(),
-    userProviderId,
-    isPrivyAuth,
+    privyId,
+    merchantId,
   });
 
   return {

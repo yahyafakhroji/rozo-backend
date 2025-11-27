@@ -12,7 +12,7 @@ import { corsConfig, CONSTANTS } from "../../_shared/config/index.ts";
 
 // Middleware
 import {
-  dualAuthMiddleware,
+  privyAuthMiddleware,
   errorMiddleware,
   notFoundHandler,
   merchantResolverMiddleware,
@@ -57,7 +57,7 @@ app.use("*", errorMiddleware);
 /**
  * GET /merchants - Get merchant profile
  */
-app.get("/", dualAuthMiddleware, merchantResolverMiddleware, async (c) => {
+app.get("/", privyAuthMiddleware, merchantResolverMiddleware, async (c) => {
   const merchant = getMerchantFromContext(c);
 
   // Create safe profile object by excluding PIN-related fields
@@ -78,7 +78,7 @@ app.get("/", dualAuthMiddleware, merchantResolverMiddleware, async (c) => {
 /**
  * POST /merchants - Create or update merchant (upsert)
  */
-app.post("/", dualAuthMiddleware, async (c) => {
+app.post("/", privyAuthMiddleware, async (c) => {
   const supabase = c.get("supabase") as TypedSupabaseClient;
   const privyId = c.get("privyId") as string;
   const walletAddress = c.get("walletAddress") as string;
@@ -169,7 +169,7 @@ app.post("/", dualAuthMiddleware, async (c) => {
 /**
  * PUT /merchants - Update merchant profile
  */
-app.put("/", dualAuthMiddleware, merchantResolverMiddleware, async (c) => {
+app.put("/", privyAuthMiddleware, merchantResolverMiddleware, async (c) => {
   const supabase = c.get("supabase") as TypedSupabaseClient;
   const merchant = getMerchantFromContext(c);
 
@@ -247,7 +247,7 @@ app.put("/", dualAuthMiddleware, merchantResolverMiddleware, async (c) => {
 /**
  * GET /merchants/status - Check merchant status
  */
-app.get("/status", dualAuthMiddleware, merchantResolverMiddleware, async (c) => {
+app.get("/status", privyAuthMiddleware, merchantResolverMiddleware, async (c) => {
   const merchant = getMerchantFromContext(c);
 
   return c.json({
@@ -262,7 +262,7 @@ app.get("/status", dualAuthMiddleware, merchantResolverMiddleware, async (c) => 
 /**
  * POST /merchants/pin - Set PIN code
  */
-app.post("/pin", dualAuthMiddleware, merchantResolverMiddleware, async (c) => {
+app.post("/pin", privyAuthMiddleware, merchantResolverMiddleware, async (c) => {
   const supabase = c.get("supabase") as TypedSupabaseClient;
   const merchant = getMerchantFromContext(c);
 
@@ -300,7 +300,7 @@ app.post("/pin", dualAuthMiddleware, merchantResolverMiddleware, async (c) => {
 /**
  * PUT /merchants/pin - Update PIN code
  */
-app.put("/pin", dualAuthMiddleware, merchantResolverMiddleware, async (c) => {
+app.put("/pin", privyAuthMiddleware, merchantResolverMiddleware, async (c) => {
   const supabase = c.get("supabase") as TypedSupabaseClient;
   const merchant = getMerchantFromContext(c);
 
@@ -338,7 +338,7 @@ app.put("/pin", dualAuthMiddleware, merchantResolverMiddleware, async (c) => {
 /**
  * DELETE /merchants/pin - Revoke PIN code
  */
-app.delete("/pin", dualAuthMiddleware, merchantResolverMiddleware, async (c) => {
+app.delete("/pin", privyAuthMiddleware, merchantResolverMiddleware, async (c) => {
   const supabase = c.get("supabase") as TypedSupabaseClient;
   const merchant = getMerchantFromContext(c);
 
@@ -375,7 +375,7 @@ app.delete("/pin", dualAuthMiddleware, merchantResolverMiddleware, async (c) => 
 /**
  * POST /merchants/pin/validate - Validate PIN code
  */
-app.post("/pin/validate", dualAuthMiddleware, merchantResolverMiddleware, async (c) => {
+app.post("/pin/validate", privyAuthMiddleware, merchantResolverMiddleware, async (c) => {
   const supabase = c.get("supabase") as TypedSupabaseClient;
   const merchant = getMerchantFromContext(c);
 

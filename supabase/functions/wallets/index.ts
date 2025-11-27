@@ -15,7 +15,7 @@ import { corsConfig } from "../../_shared/config/index.ts";
 
 // Middleware
 import {
-  dualAuthMiddleware,
+  privyAuthMiddleware,
   errorMiddleware,
   merchantResolverMiddleware,
   getMerchantFromContext,
@@ -123,7 +123,7 @@ const CACHE_TTL = 5 * 60 * 1000;
 
 app.use("*", cors(corsConfig));
 app.use("*", errorMiddleware);
-app.use("*", dualAuthMiddleware);
+app.use("*", privyAuthMiddleware);
 app.use("*", merchantResolverMiddleware);
 
 // ============================================================================

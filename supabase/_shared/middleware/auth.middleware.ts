@@ -115,12 +115,6 @@ export const privyAuthMiddleware: MiddlewareHandler = async (
 };
 
 /**
- * @deprecated Use privyAuthMiddleware instead
- * Alias for backward compatibility during migration
- */
-export const dualAuthMiddleware = privyAuthMiddleware;
-
-/**
  * Merchant status check middleware
  * Must be used after privyAuthMiddleware
  * Blocks requests from PIN_BLOCKED or INACTIVE merchants

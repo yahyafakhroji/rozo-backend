@@ -12,7 +12,7 @@ import { corsConfig } from "../../_shared/config/index.ts";
 
 // Middleware
 import {
-  dualAuthMiddleware,
+  privyAuthMiddleware,
   errorMiddleware,
   notFoundHandler,
   merchantResolverMiddleware,
@@ -45,7 +45,7 @@ const app = new Hono().basePath("/withdrawals");
 // Apply middleware
 app.use("*", cors(corsConfig));
 app.use("*", errorMiddleware);
-app.use("*", dualAuthMiddleware);
+app.use("*", privyAuthMiddleware);
 app.use("*", merchantResolverMiddleware);
 
 // ============================================================================
