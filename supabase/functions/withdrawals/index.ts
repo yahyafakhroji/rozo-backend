@@ -1,6 +1,7 @@
 /**
  * Withdrawals Function
  * Handles withdrawal history and creation
+ * Refactored to use new middleware and type-safe utilities
  */
 
 import { Hono } from "jsr:@hono/hono";
@@ -14,16 +15,30 @@ import {
   dualAuthMiddleware,
   errorMiddleware,
   notFoundHandler,
+  merchantResolverMiddleware,
+  getMerchantFromContext,
 } from "../../_shared/middleware/index.ts";
 
 // Services
-import { validateMerchant, requirePinValidation } from "../../_shared/services/merchant.service.ts";
+import { requirePinValidation } from "../../_shared/services/merchant.service.ts";
+import {
+  logWithdrawalEvent,
+  AuditAction,
+} from "../../_shared/services/audit.service.ts";
 
-// Validators
-import { validateWithdrawalRequest } from "../../_shared/validators/order.validator.ts";
+// Schemas
+import {
+  CreateWithdrawalSchema,
+  PaginationSchema,
+  safeParseBody,
+} from "../../_shared/schemas/index.ts";
 
 // Utils
 import { extractPinFromHeaders } from "../../_shared/utils/helpers.ts";
+import { rateLimitByMerchant, RATE_LIMITS } from "../../_shared/utils/rateLimit.utils.ts";
+
+// Types
+import type { TypedSupabaseClient } from "../../_shared/types/common.types.ts";
 
 const app = new Hono().basePath("/withdrawals");
 
@@ -31,6 +46,7 @@ const app = new Hono().basePath("/withdrawals");
 app.use("*", cors(corsConfig));
 app.use("*", errorMiddleware);
 app.use("*", dualAuthMiddleware);
+app.use("*", merchantResolverMiddleware);
 
 // ============================================================================
 // Route Handlers
@@ -40,34 +56,46 @@ app.use("*", dualAuthMiddleware);
  * GET /withdrawals - Get withdrawal history
  */
 app.get("/", async (c) => {
-  const supabase = c.get("supabase");
-  const userProviderId = c.get("dynamicId");
-  const isPrivyAuth = c.get("isPrivyAuth");
+  const supabase = c.get("supabase") as TypedSupabaseClient;
+  const merchant = getMerchantFromContext(c);
 
-  // Validate merchant
-  const merchantResult = await validateMerchant(supabase, userProviderId, isPrivyAuth);
-  if (!merchantResult.success || !merchantResult.merchant) {
-    const status = merchantResult.code ? 403 : 404;
-    return c.json(
-      { success: false, error: merchantResult.error, code: merchantResult.code },
-      status,
-    );
+  // Parse pagination
+  const url = new URL(c.req.url);
+  const paginationResult = safeParseBody(PaginationSchema, {
+    limit: url.searchParams.get("limit") || undefined,
+    offset: url.searchParams.get("offset") || undefined,
+  });
+
+  if (!paginationResult.success) {
+    return c.json({ success: false, error: paginationResult.error }, 400);
   }
 
-  // Retrieve withdrawal histories
-  const { data: withdrawals, error } = await supabase
-    .from("withdrawals")
-    .select(`
-      withdrawal_id,
-      recipient,
-      amount,
-      currency,
-      tx_hash,
-      created_at,
-      updated_at
-    `)
-    .eq("merchant_id", merchantResult.merchant.merchant_id)
-    .order("created_at", { ascending: false });
+  const { limit, offset } = paginationResult.data;
+
+  // Run count and data queries in parallel
+  const [countResult, withdrawalsResult] = await Promise.all([
+    supabase
+      .from("withdrawals")
+      .select("*", { count: "exact", head: true })
+      .eq("merchant_id", merchant.merchant_id),
+    supabase
+      .from("withdrawals")
+      .select(`
+        withdrawal_id,
+        recipient,
+        amount,
+        currency,
+        tx_hash,
+        created_at,
+        updated_at
+      `)
+      .eq("merchant_id", merchant.merchant_id)
+      .order("created_at", { ascending: false })
+      .range(offset, offset + limit - 1),
+  ]);
+
+  const { data: withdrawals, error } = withdrawalsResult;
+  const { count: totalCount } = countResult;
 
   if (error) {
     return c.json({ success: false, error: "Failed to retrieve withdrawal histories" }, 500);
@@ -76,7 +104,9 @@ app.get("/", async (c) => {
   return c.json({
     success: true,
     data: withdrawals || [],
-    count: withdrawals?.length || 0,
+    total: totalCount || 0,
+    offset,
+    limit,
   });
 });
 
@@ -84,37 +114,32 @@ app.get("/", async (c) => {
  * POST /withdrawals - Create withdrawal request
  */
 app.post("/", async (c) => {
-  const supabase = c.get("supabase");
-  const userProviderId = c.get("dynamicId");
-  const isPrivyAuth = c.get("isPrivyAuth");
+  const supabase = c.get("supabase") as TypedSupabaseClient;
+  const merchant = getMerchantFromContext(c);
 
-  // Validate merchant
-  const merchantResult = await validateMerchant(supabase, userProviderId, isPrivyAuth);
-  if (!merchantResult.success || !merchantResult.merchant) {
-    const status = merchantResult.code ? 403 : 404;
-    return c.json(
-      { success: false, error: merchantResult.error, code: merchantResult.code },
-      status,
-    );
+  // Apply rate limiting for withdrawals
+  try {
+    rateLimitByMerchant(merchant.merchant_id, "withdrawals", RATE_LIMITS.WITHDRAWAL);
+  } catch (error) {
+    return c.json({
+      success: false,
+      error: "Too many withdrawal requests. Please try again later.",
+      code: "RATE_LIMIT_EXCEEDED",
+    }, 429);
   }
 
   // Parse and validate request
   const body = await c.req.json();
-  const validation = validateWithdrawalRequest(body);
-  if (!validation.success || !validation.data) {
+  const validation = safeParseBody(CreateWithdrawalSchema, body);
+
+  if (!validation.success) {
     return c.json({ success: false, error: validation.error }, 400);
   }
 
   const { recipient, amount, currency } = validation.data;
 
   // Check if merchant has PIN set and validate
-  const { data: merchantWithPin } = await supabase
-    .from("merchants")
-    .select("pin_code_hash")
-    .eq("merchant_id", merchantResult.merchant.merchant_id)
-    .single();
-
-  if (merchantWithPin?.pin_code_hash) {
+  if (merchant.has_pin) {
     const pinCode = extractPinFromHeaders(c.req.raw);
 
     if (!pinCode) {
@@ -130,7 +155,7 @@ app.post("/", async (c) => {
 
     const pinValidation = await requirePinValidation({
       supabase,
-      merchantId: merchantResult.merchant.merchant_id,
+      merchantId: merchant.merchant_id,
       pinCode,
       ipAddress,
       userAgent,
@@ -147,15 +172,16 @@ app.post("/", async (c) => {
   }
 
   // Insert withdrawal record
+  const now = new Date().toISOString();
   const { data: withdrawal, error } = await supabase
     .from("withdrawals")
     .insert({
-      merchant_id: merchantResult.merchant.merchant_id,
+      merchant_id: merchant.merchant_id,
       recipient,
       amount,
       currency,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
+      created_at: now,
+      updated_at: now,
     })
     .select()
     .single();
@@ -163,6 +189,15 @@ app.post("/", async (c) => {
   if (error) {
     return c.json({ success: false, error: "Failed to create withdrawal request" }, 500);
   }
+
+  // Log audit event
+  logWithdrawalEvent(
+    supabase,
+    merchant.merchant_id,
+    withdrawal.withdrawal_id,
+    AuditAction.WITHDRAWAL_INITIATED,
+    { recipient, amount, currency },
+  );
 
   return c.json({ success: true, data: withdrawal }, 201);
 });

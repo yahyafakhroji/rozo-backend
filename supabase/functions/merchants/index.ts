@@ -1,31 +1,48 @@
 /**
  * Merchants Function
  * Handles merchant profile management and PIN operations
+ * Refactored to use new middleware and type-safe utilities
  */
 
 import { Hono } from "jsr:@hono/hono";
 import { cors } from "jsr:@hono/hono/cors";
 
 // Config
-import { corsConfig } from "../../_shared/config/index.ts";
+import { corsConfig, CONSTANTS } from "../../_shared/config/index.ts";
 
 // Middleware
 import {
   dualAuthMiddleware,
   errorMiddleware,
   notFoundHandler,
+  merchantResolverMiddleware,
+  getMerchantFromContext,
 } from "../../_shared/middleware/index.ts";
 
 // Services
 import {
-  validateMerchant,
   setMerchantPin,
   updateMerchantPin,
   revokeMerchantPin,
   validatePinCode,
 } from "../../_shared/services/merchant.service.ts";
+import {
+  logPinOperation,
+  AuditAction,
+} from "../../_shared/services/audit.service.ts";
 
-const DEFAULT_TOKEN_ID = "USDC_BASE";
+// Schemas
+import {
+  SetPinSchema,
+  UpdatePinSchema,
+  RevokePinSchema,
+  safeParseBody,
+} from "../../_shared/schemas/index.ts";
+
+// Types
+import type { TypedSupabaseClient } from "../../_shared/types/common.types.ts";
+
+const DEFAULT_TOKEN_ID = CONSTANTS.DEFAULTS.TOKEN_ID;
 
 const app = new Hono().basePath("/merchants");
 
@@ -40,24 +57,8 @@ app.use("*", errorMiddleware);
 /**
  * GET /merchants - Get merchant profile
  */
-app.get("/", dualAuthMiddleware, async (c) => {
-  const supabase = c.get("supabase");
-  const userProviderId = c.get("dynamicId");
-  const isPrivyAuth = c.get("isPrivyAuth");
-
-  // Query merchant
-  const merchantQuery = supabase.from("merchants").select("*");
-  const { data, error } = isPrivyAuth
-    ? await merchantQuery.eq("privy_id", userProviderId).single()
-    : await merchantQuery.eq("dynamic_id", userProviderId).single();
-
-  if (!data) {
-    return c.json({ success: false, error: "Data not found" }, 404);
-  }
-
-  if (error) {
-    return c.json({ success: false, error: error.message }, 400);
-  }
+app.get("/", dualAuthMiddleware, merchantResolverMiddleware, async (c) => {
+  const merchant = getMerchantFromContext(c);
 
   // Create safe profile object by excluding PIN-related fields
   const {
@@ -66,10 +67,10 @@ app.get("/", dualAuthMiddleware, async (c) => {
     pin_code_blocked_at,
     pin_code_last_attempt_at,
     ...safeProfile
-  } = data;
+  } = merchant as Record<string, unknown>;
 
   // Add computed has_pin field for convenience
-  safeProfile.has_pin = !!data.pin_code_hash;
+  (safeProfile as Record<string, unknown>).has_pin = merchant.has_pin;
 
   return c.json({ success: true, profile: safeProfile });
 });
@@ -78,7 +79,7 @@ app.get("/", dualAuthMiddleware, async (c) => {
  * POST /merchants - Create or update merchant (upsert)
  */
 app.post("/", dualAuthMiddleware, async (c) => {
-  const supabase = c.get("supabase");
+  const supabase = c.get("supabase") as TypedSupabaseClient;
   const dynamicPayload = c.get("dynamicPayload");
   const privyPayload = c.get("privyPayload");
   const walletAddress = c.get("walletAddress");
@@ -135,8 +136,8 @@ app.post("/", dualAuthMiddleware, async (c) => {
     .select("merchant_id, privy_id, dynamic_id");
 
   const { data: existingByProvider } = isPrivyAuth
-    ? await existingByProviderQuery.eq("privy_id", userProviderId).single()
-    : await existingByProviderQuery.eq("dynamic_id", userProviderId).single();
+    ? await existingByProviderQuery.eq("privy_id", userProviderId as string).single()
+    : await existingByProviderQuery.eq("dynamic_id", userProviderId as string).single();
 
   let data, error;
 
@@ -157,8 +158,8 @@ app.post("/", dualAuthMiddleware, async (c) => {
       .single();
 
     ({ data, error } = isPrivyAuth
-      ? await updateQuery.eq("privy_id", userProviderId)
-      : await updateQuery.eq("dynamic_id", userProviderId));
+      ? await updateQuery.eq("privy_id", userProviderId as string)
+      : await updateQuery.eq("dynamic_id", userProviderId as string));
   } else {
     // Insert new merchant
     ({ data, error } = await supabase
@@ -182,20 +183,9 @@ app.post("/", dualAuthMiddleware, async (c) => {
 /**
  * PUT /merchants - Update merchant profile
  */
-app.put("/", dualAuthMiddleware, async (c) => {
-  const supabase = c.get("supabase");
-  const userProviderId = c.get("dynamicId");
-  const isPrivyAuth = c.get("isPrivyAuth");
-
-  // Get the current merchant data first
-  const merchantQuery = supabase.from("merchants").select("*");
-  const { data: existingMerchant, error: fetchError } = isPrivyAuth
-    ? await merchantQuery.eq("privy_id", userProviderId).single()
-    : await merchantQuery.eq("dynamic_id", userProviderId).single();
-
-  if (fetchError || !existingMerchant) {
-    return c.json({ success: false, error: "Merchant not found" }, 404);
-  }
+app.put("/", dualAuthMiddleware, merchantResolverMiddleware, async (c) => {
+  const supabase = c.get("supabase") as TypedSupabaseClient;
+  const merchant = getMerchantFromContext(c);
 
   // Parse the request body
   const body = await c.req.json();
@@ -218,7 +208,7 @@ app.put("/", dualAuthMiddleware, async (c) => {
       const binaryData = Uint8Array.from(atob(base64Data), (char) => char.charCodeAt(0));
 
       const bucketName = Deno.env.get("STORAGE_BUCKET_NAME")!;
-      const fileName = `${existingMerchant.merchant_id}_${Date.now()}.png`;
+      const fileName = `${merchant.merchant_id}_${Date.now()}.png`;
       const filePath = `merchants/${fileName}`;
 
       const { error: uploadError } = await supabase.storage
@@ -246,15 +236,12 @@ app.put("/", dualAuthMiddleware, async (c) => {
   }
 
   // Update merchant record
-  const updateQuery = supabase
+  const { data: updatedMerchant, error: updateError } = await supabase
     .from("merchants")
     .update(updateData)
+    .eq("merchant_id", merchant.merchant_id)
     .select()
     .single();
-
-  const { data: updatedMerchant, error: updateError } = isPrivyAuth
-    ? await updateQuery.eq("privy_id", userProviderId)
-    : await updateQuery.eq("dynamic_id", userProviderId);
 
   if (updateError) {
     return c.json({ success: false, error: updateError.message }, 400);
@@ -274,55 +261,31 @@ app.put("/", dualAuthMiddleware, async (c) => {
 /**
  * GET /merchants/status - Check merchant status
  */
-app.get("/status", dualAuthMiddleware, async (c) => {
-  const supabase = c.get("supabase");
-  const userProviderId = c.get("dynamicId");
-  const isPrivyAuth = c.get("isPrivyAuth");
-
-  const merchantQuery = supabase
-    .from("merchants")
-    .select("merchant_id, status, pin_code_hash, pin_code_attempts, pin_code_blocked_at");
-
-  const { data: merchant, error } = isPrivyAuth
-    ? await merchantQuery.eq("privy_id", userProviderId).single()
-    : await merchantQuery.eq("dynamic_id", userProviderId).single();
-
-  if (error || !merchant) {
-    return c.json({ success: false, error: "Merchant not found" }, 404);
-  }
+app.get("/status", dualAuthMiddleware, merchantResolverMiddleware, async (c) => {
+  const merchant = getMerchantFromContext(c);
 
   return c.json({
     success: true,
     status: merchant.status || "ACTIVE",
-    has_pin: !!merchant.pin_code_hash,
-    pin_attempts: merchant.pin_code_attempts || 0,
-    pin_blocked_at: merchant.pin_code_blocked_at,
+    has_pin: merchant.has_pin,
+    pin_attempts: (merchant as Record<string, unknown>).pin_code_attempts || 0,
+    pin_blocked_at: (merchant as Record<string, unknown>).pin_code_blocked_at,
   });
 });
 
 /**
  * POST /merchants/pin - Set PIN code
  */
-app.post("/pin", dualAuthMiddleware, async (c) => {
-  const supabase = c.get("supabase");
-  const userProviderId = c.get("dynamicId");
-  const isPrivyAuth = c.get("isPrivyAuth");
+app.post("/pin", dualAuthMiddleware, merchantResolverMiddleware, async (c) => {
+  const supabase = c.get("supabase") as TypedSupabaseClient;
+  const merchant = getMerchantFromContext(c);
 
-  // Validate merchant and check status
-  const merchantResult = await validateMerchant(supabase, userProviderId, isPrivyAuth);
-  if (!merchantResult.success || !merchantResult.merchant) {
-    const status = merchantResult.code ? 403 : 404;
-    return c.json(
-      { success: false, error: merchantResult.error, code: merchantResult.code },
-      status,
-    );
-  }
-
+  // Validate request body
   const body = await c.req.json();
-  const { pin_code } = body;
+  const validation = safeParseBody(SetPinSchema, body);
 
-  if (!pin_code) {
-    return c.json({ success: false, error: "PIN code is required" }, 400);
+  if (!validation.success) {
+    return c.json({ success: false, error: validation.error }, 400);
   }
 
   // Extract client info
@@ -331,11 +294,16 @@ app.post("/pin", dualAuthMiddleware, async (c) => {
 
   const result = await setMerchantPin(
     supabase,
-    merchantResult.merchant.merchant_id,
-    pin_code,
+    merchant.merchant_id,
+    validation.data.pin_code,
     ipAddress,
     userAgent,
   );
+
+  // Log audit event
+  if (result.success) {
+    logPinOperation(supabase, merchant.merchant_id, AuditAction.PIN_SET, ipAddress, userAgent);
+  }
 
   return c.json(
     { success: result.success, message: result.message, error: result.error },
@@ -346,26 +314,16 @@ app.post("/pin", dualAuthMiddleware, async (c) => {
 /**
  * PUT /merchants/pin - Update PIN code
  */
-app.put("/pin", dualAuthMiddleware, async (c) => {
-  const supabase = c.get("supabase");
-  const userProviderId = c.get("dynamicId");
-  const isPrivyAuth = c.get("isPrivyAuth");
+app.put("/pin", dualAuthMiddleware, merchantResolverMiddleware, async (c) => {
+  const supabase = c.get("supabase") as TypedSupabaseClient;
+  const merchant = getMerchantFromContext(c);
 
-  // Validate merchant and check status
-  const merchantResult = await validateMerchant(supabase, userProviderId, isPrivyAuth);
-  if (!merchantResult.success || !merchantResult.merchant) {
-    const status = merchantResult.code ? 403 : 404;
-    return c.json(
-      { success: false, error: merchantResult.error, code: merchantResult.code },
-      status,
-    );
-  }
-
+  // Validate request body
   const body = await c.req.json();
-  const { current_pin, new_pin } = body;
+  const validation = safeParseBody(UpdatePinSchema, body);
 
-  if (!current_pin || !new_pin) {
-    return c.json({ success: false, error: "Current PIN and new PIN are required" }, 400);
+  if (!validation.success) {
+    return c.json({ success: false, error: validation.error }, 400);
   }
 
   const ipAddress = c.req.header("x-forwarded-for") || c.req.header("x-real-ip") || "unknown";
@@ -373,12 +331,17 @@ app.put("/pin", dualAuthMiddleware, async (c) => {
 
   const result = await updateMerchantPin(
     supabase,
-    merchantResult.merchant.merchant_id,
-    current_pin,
-    new_pin,
+    merchant.merchant_id,
+    validation.data.current_pin,
+    validation.data.new_pin,
     ipAddress,
     userAgent,
   );
+
+  // Log audit event
+  if (result.success) {
+    logPinOperation(supabase, merchant.merchant_id, AuditAction.PIN_UPDATED, ipAddress, userAgent);
+  }
 
   return c.json(
     { success: result.success, message: result.message, error: result.error },
@@ -389,26 +352,16 @@ app.put("/pin", dualAuthMiddleware, async (c) => {
 /**
  * DELETE /merchants/pin - Revoke PIN code
  */
-app.delete("/pin", dualAuthMiddleware, async (c) => {
-  const supabase = c.get("supabase");
-  const userProviderId = c.get("dynamicId");
-  const isPrivyAuth = c.get("isPrivyAuth");
+app.delete("/pin", dualAuthMiddleware, merchantResolverMiddleware, async (c) => {
+  const supabase = c.get("supabase") as TypedSupabaseClient;
+  const merchant = getMerchantFromContext(c);
 
-  // Validate merchant and check status
-  const merchantResult = await validateMerchant(supabase, userProviderId, isPrivyAuth);
-  if (!merchantResult.success || !merchantResult.merchant) {
-    const status = merchantResult.code ? 403 : 404;
-    return c.json(
-      { success: false, error: merchantResult.error, code: merchantResult.code },
-      status,
-    );
-  }
-
+  // Validate request body
   const body = await c.req.json();
-  const { pin_code } = body;
+  const validation = safeParseBody(RevokePinSchema, body);
 
-  if (!pin_code) {
-    return c.json({ success: false, error: "PIN code is required" }, 400);
+  if (!validation.success) {
+    return c.json({ success: false, error: validation.error }, 400);
   }
 
   const ipAddress = c.req.header("x-forwarded-for") || c.req.header("x-real-ip") || "unknown";
@@ -416,11 +369,16 @@ app.delete("/pin", dualAuthMiddleware, async (c) => {
 
   const result = await revokeMerchantPin(
     supabase,
-    merchantResult.merchant.merchant_id,
-    pin_code,
+    merchant.merchant_id,
+    validation.data.pin_code,
     ipAddress,
     userAgent,
   );
+
+  // Log audit event
+  if (result.success) {
+    logPinOperation(supabase, merchant.merchant_id, AuditAction.PIN_REVOKED, ipAddress, userAgent);
+  }
 
   return c.json(
     { success: result.success, message: result.message, error: result.error },
@@ -431,26 +389,16 @@ app.delete("/pin", dualAuthMiddleware, async (c) => {
 /**
  * POST /merchants/pin/validate - Validate PIN code
  */
-app.post("/pin/validate", dualAuthMiddleware, async (c) => {
-  const supabase = c.get("supabase");
-  const userProviderId = c.get("dynamicId");
-  const isPrivyAuth = c.get("isPrivyAuth");
+app.post("/pin/validate", dualAuthMiddleware, merchantResolverMiddleware, async (c) => {
+  const supabase = c.get("supabase") as TypedSupabaseClient;
+  const merchant = getMerchantFromContext(c);
 
-  // Get merchant (no status blocking for validation endpoint)
-  const merchantQuery = supabase.from("merchants").select("merchant_id");
-  const { data: merchant, error } = isPrivyAuth
-    ? await merchantQuery.eq("privy_id", userProviderId).single()
-    : await merchantQuery.eq("dynamic_id", userProviderId).single();
-
-  if (error || !merchant) {
-    return c.json({ success: false, error: "Merchant not found" }, 404);
-  }
-
+  // Validate request body
   const body = await c.req.json();
-  const { pin_code } = body;
+  const validation = safeParseBody(SetPinSchema, body); // Uses same schema
 
-  if (!pin_code) {
-    return c.json({ success: false, error: "PIN code is required" }, 400);
+  if (!validation.success) {
+    return c.json({ success: false, error: validation.error }, 400);
   }
 
   const ipAddress = c.req.header("x-forwarded-for") || c.req.header("x-real-ip") || "unknown";
@@ -459,7 +407,7 @@ app.post("/pin/validate", dualAuthMiddleware, async (c) => {
   const result = await validatePinCode(
     supabase,
     merchant.merchant_id,
-    pin_code,
+    validation.data.pin_code,
     ipAddress,
     userAgent,
   );
