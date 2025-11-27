@@ -28,7 +28,7 @@ This document covers the technical architecture, project structure, and core fun
 │   ├── _shared/           # Shared utilities and middleware
 │   │   ├── config/        # Constants, CORS configuration
 │   │   ├── middleware/    # Auth, error handling, PIN validation
-│   │   ├── services/      # Business logic services
+│   │   ├── services/      # Business logic services (merchant, payment, currency, wallet)
 │   │   ├── utils/         # Common utility functions
 │   │   ├── types/         # TypeScript interfaces
 │   │   ├── schemas/       # Zod validation schemas
@@ -67,7 +67,8 @@ This document covers the technical architecture, project structure, and core fun
 │   │   ├── 20250914172728_add_privy_id.sql # Privy integration
 │   │   ├── 20251020111110_add_merchant_pincode_status.sql # PIN code & status
 │   │   ├── 20251022120000_add_orders_expired_payment_data.sql # Order enhancements
-│   │   └── 20251023000000_add_preferred_token_id_to_orders.sql # Preferred token system
+│   │   ├── 20251023000000_add_preferred_token_id_to_orders.sql # Preferred token system
+│   │   └── 20251127153804_wallet_management_restructure.sql # Multi-chain wallet management
 │   └── seed.sql           # Initial data for development
 ```
 
@@ -77,10 +78,19 @@ Core backend logic is handled by these Supabase Edge Functions:
 
 ### 1. `/merchants`
 
-- **Manages**: Merchant profiles (create, read, update)
+- **Manages**: Merchant profiles (create, read, update) and wallet management
 - **Auth**: Privy JWT
-- **Features**: Profile management, logo upload, merchant settings
+- **Features**: Profile management, logo upload, merchant settings, multi-chain wallet management
 - **Database**: Uses `privy_id` column for merchant identification
+- **Wallet Endpoints**:
+  - `GET /merchants/chains` - List supported blockchain networks
+  - `GET /merchants/wallets` - List merchant's wallets
+  - `GET /merchants/wallets/{walletId}` - Get wallet details
+  - `POST /merchants/wallets` - Add new wallet
+  - `PUT /merchants/wallets/{walletId}` - Update wallet (label, primary)
+  - `PUT /merchants/wallets/{walletId}/primary` - Set wallet as primary for its chain
+  - `DELETE /merchants/wallets/{walletId}` - Remove wallet
+  - `POST /merchants/wallets/sync` - Sync Privy embedded wallet
 
 ### 2. `/orders`
 
@@ -172,14 +182,20 @@ All functions (except webhooks) follow this pattern:
 - **deposits**: Merchant deposit requests
 - **withdrawals**: Merchant withdrawal processing
 - **currencies**: Exchange rates for currency conversion
-- **tokens**: Supported payment tokens and chains
+- **tokens**: Supported payment tokens linked to chains
+- **chains**: Supported blockchain networks (EVM, Stellar, Solana)
+- **merchant_wallets**: Merchant wallet addresses per chain with primary designation
 
 ### Key Relationships
 
 - Merchants can have multiple orders, deposits, and withdrawals
+- Merchants can have multiple wallets across different chains
+- Each chain can have one primary wallet per merchant
+- Tokens link to chains via `chain_id` (determines which wallet to use)
 - Orders link to merchants via `merchant_id`
 - Orders include payment data and expiration timestamps
 - Currency conversion uses cached rates from currencies table
+- Transaction destination address determined by `default_token_id` → chain → primary wallet
 
 ## Performance Architecture
 
