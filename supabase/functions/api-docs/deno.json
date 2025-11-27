@@ -1,0 +1,6 @@
+{
+  "imports": {
+    "@hono/hono": "jsr:@hono/hono@^4.6.3",
+    "@hono/hono/cors": "jsr:@hono/hono@^4.6.3/cors"
+  }
+}
