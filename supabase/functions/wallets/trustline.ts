@@ -8,35 +8,21 @@ import {
   MemoType,
   Networks,
   Operation,
-  // Server,
   Transaction,
   TransactionBuilder,
 } from "stellar-sdk";
+
+// Debug utilities
+import { stellarTrustlineLogger as logger } from "../../_shared/utils/debug.utils.ts";
+const debugLog = (step: string, data?: unknown) => logger.debug(step, data);
+const debugError = (step: string, error: unknown) => logger.error(step, error);
+const debugSuccess = (step: string, data?: unknown) => logger.success(step, data);
 
 // --- CONSTANTS ---
 export const HORIZON_PUBLIC_URL = "https://horizon.stellar.org";
 export const USDC_ISSUER =
   "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN";
 export const USDC_ASSET = new Asset("USDC", USDC_ISSUER);
-
-// --- DEBUG HELPERS ---
-function debugLog(step: string, data?: unknown): void {
-  console.log(
-    `🔍 [STELLAR] ${step}`,
-    data ? JSON.stringify(data, null, 2) : "",
-  );
-}
-
-function debugError(step: string, error: unknown): void {
-  console.error(`❌ [STELLAR] ${step}:`, error);
-}
-
-function debugSuccess(step: string, data?: unknown): void {
-  console.log(
-    `✅ [STELLAR] ${step}`,
-    data ? JSON.stringify(data, null, 2) : "",
-  );
-}
 
 // Reusable Horizon server instance (MAINNET)
 export function getMainnetServer(): Horizon.Server {

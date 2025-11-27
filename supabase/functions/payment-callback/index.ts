@@ -12,6 +12,9 @@ import { corsConfig, PaymentStatus, STATUS_HIERARCHY } from "../../_shared/confi
 // Services
 import { sendNotificationToDevices } from "../../_shared/services/notification.service.ts";
 
+// Utils
+import { createSupabaseClient } from "../../_shared/utils/supabase.utils.ts";
+
 // Local pusher notification
 import { pushNotification } from "./pusher.ts";
 
@@ -219,15 +222,7 @@ async function handleWebhookType(
 app.post("/", async (c) => {
   try {
     // Initialize Supabase client
-    const { createClient } = await import("https://esm.sh/@supabase/supabase-js@2.39.3");
-    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-    const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    const supabase = createClient(supabaseUrl, supabaseKey, {
-      auth: {
-        persistSession: false,
-        autoRefreshToken: false,
-      },
-    });
+    const supabase = createSupabaseClient();
 
     // Parse webhook payload
     const webhookEvent: DaimoWebhookEvent = await c.req.json();

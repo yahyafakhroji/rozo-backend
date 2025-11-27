@@ -92,21 +92,11 @@ const transactionCache = new Map<string, {
 // Cache TTL: 5 minutes
 const CACHE_TTL = 5 * 60 * 1000;
 
-// --- DEBUGGING UTILITIES ---
-function debugLog(step: string, data?: unknown): void {
-  console.log(`🔍 [DEBUG] ${step}`, data ? JSON.stringify(data, null, 2) : "");
-}
-
-function debugError(step: string, error: unknown): void {
-  console.error(`❌ [ERROR] ${step}:`, error);
-}
-
-function debugSuccess(step: string, data?: unknown): void {
-  console.log(
-    `✅ [SUCCESS] ${step}`,
-    data ? JSON.stringify(data, null, 2) : "",
-  );
-}
+// Debug utilities
+import { walletLogger as logger } from "../../_shared/utils/debug.utils.ts";
+const debugLog = (step: string, data?: unknown) => logger.debug(step, data);
+const debugError = (step: string, error: unknown) => logger.error(step, error);
+const debugSuccess = (step: string, data?: unknown) => logger.success(step, data);
 
 // --- UTILITY FUNCTIONS ---
 
@@ -319,31 +309,6 @@ async function validateTransactionRequest(
   });
 
   return { token, walletOwner };
-}
-
-async function _signMessageForWallet(
-  privy: PrivyClient,
-  walletId: string,
-  token: string,
-  config: TransactionConfig,
-): Promise<string> {
-  debugLog("Signing message for wallet", { walletId });
-
-  const message =
-    `Transfer ${config.amountToSend} USDC to ${config.recipientAddress}`;
-
-  const response = await privy
-    .wallets()
-    .ethereum()
-    .signMessage(walletId, {
-      message,
-      authorization_context: {
-        user_jwts: [token],
-      },
-    });
-
-  debugSuccess("Message signed", { signature: response.signature });
-  return response.signature;
 }
 
 async function updateWalletWithPolicy(
@@ -585,15 +550,7 @@ async function handleTransactions(c: Context, walletId: string) {
       appSecret: PRIVY_APP_SECRET,
     });
 
-    // Step 5: Sign message for wallet authorization
-    // const signature = await _signMessageForWallet(
-    //   privy,
-    //   walletId,
-    //   token,
-    //   transactionConfig,
-    // );
-
-    // Step 6: Update wallet with policy
+    // Step 5: Update wallet with policy
     await updateWalletWithPolicy(
       privy,
       walletId,
