@@ -41,51 +41,64 @@ ON orders(status, expired_at)
 WHERE status = 'PENDING';
 
 -- ============================================================================
--- Deposits Table Indexes
+-- Deposits Table Indexes (only if table exists)
 -- ============================================================================
 
--- Composite index for merchant deposit listings
-CREATE INDEX IF NOT EXISTS idx_deposits_merchant_status_created
-ON deposits(merchant_id, status, created_at DESC);
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'deposits') THEN
+        CREATE INDEX IF NOT EXISTS idx_deposits_merchant_status_created
+        ON deposits(merchant_id, status, created_at DESC);
 
--- Index for payment callback lookups by deposit number
-CREATE INDEX IF NOT EXISTS idx_deposits_number
-ON deposits(number);
+        CREATE INDEX IF NOT EXISTS idx_deposits_number
+        ON deposits(number);
 
--- Index for payment callback lookups by payment_id
-CREATE INDEX IF NOT EXISTS idx_deposits_payment_id
-ON deposits(payment_id);
-
--- ============================================================================
--- Withdrawals Table Indexes
--- ============================================================================
-
--- Composite index for merchant withdrawal listings
-CREATE INDEX IF NOT EXISTS idx_withdrawals_merchant_created
-ON withdrawals(merchant_id, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_deposits_payment_id
+        ON deposits(payment_id);
+    END IF;
+END $$;
 
 -- ============================================================================
--- Merchant Devices Table Indexes
+-- Withdrawals Table Indexes (only if table exists)
 -- ============================================================================
 
--- Index for looking up devices by merchant (for notifications)
-CREATE INDEX IF NOT EXISTS idx_merchant_devices_merchant_id
-ON merchant_devices(merchant_id);
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'withdrawals') THEN
+        CREATE INDEX IF NOT EXISTS idx_withdrawals_merchant_created
+        ON withdrawals(merchant_id, created_at DESC);
+    END IF;
+END $$;
 
 -- ============================================================================
--- Currency Rates Table Indexes (if exists)
+-- Merchant Devices Table Indexes (only if table exists)
 -- ============================================================================
 
--- Index for looking up currency rates
-CREATE INDEX IF NOT EXISTS idx_currency_rates_currency
-ON currency_rates(currency)
-WHERE currency IS NOT NULL;
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'merchant_devices') THEN
+        CREATE INDEX IF NOT EXISTS idx_merchant_devices_merchant_id
+        ON merchant_devices(merchant_id);
+    END IF;
+END $$;
+
+-- ============================================================================
+-- Currency Rates Table Indexes (only if table exists)
+-- ============================================================================
+
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'currency_rates') THEN
+        CREATE INDEX IF NOT EXISTS idx_currency_rates_currency
+        ON currency_rates(currency)
+        WHERE currency IS NOT NULL;
+    END IF;
+END $$;
 
 -- ============================================================================
 -- Audit Logs Table (create if not exists)
 -- ============================================================================
 
--- Create audit_logs table for tracking sensitive operations
 CREATE TABLE IF NOT EXISTS audit_logs (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     merchant_id UUID NOT NULL REFERENCES merchants(merchant_id) ON DELETE CASCADE,
@@ -110,10 +123,9 @@ ON audit_logs(action, created_at DESC);
 -- Rate Limiting Table (create if not exists)
 -- ============================================================================
 
--- Create rate_limits table for tracking request rates
 CREATE TABLE IF NOT EXISTS rate_limits (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    identifier VARCHAR(255) NOT NULL, -- merchant_id or IP address
+    identifier VARCHAR(255) NOT NULL,
     endpoint VARCHAR(255) NOT NULL,
     request_count INTEGER DEFAULT 1,
     window_start TIMESTAMPTZ DEFAULT NOW(),
@@ -138,6 +150,5 @@ COMMENT ON INDEX idx_merchants_dynamic_id IS 'Speeds up merchant lookup during D
 COMMENT ON INDEX idx_merchants_privy_id IS 'Speeds up merchant lookup during Privy auth';
 COMMENT ON INDEX idx_orders_merchant_status_created IS 'Optimizes order listing queries with status filter';
 COMMENT ON INDEX idx_orders_number IS 'Speeds up payment callback order lookup by number';
-COMMENT ON INDEX idx_deposits_number IS 'Speeds up payment callback deposit lookup by number';
 COMMENT ON TABLE audit_logs IS 'Tracks sensitive operations for security and compliance';
 COMMENT ON TABLE rate_limits IS 'Tracks request rates for rate limiting';
