@@ -1,15 +1,44 @@
+/**
+ * Wallets Function
+ * Handles wallet operations including EVM and Stellar transfers
+ * Refactored to use new middleware and type-safe utilities
+ */
+
 import { Context, Hono } from "@hono/hono";
 import { cors } from "@hono/hono/cors";
 import { PrivyClient } from "@privy-io/node";
 import { Buffer } from "node:buffer";
 import { encodeFunctionData, erc20Abi } from "viem";
-import { dualAuthMiddleware } from "../../_shared/dual-auth-middleware.ts";
+
+// Config
+import { corsConfig } from "../../_shared/config/index.ts";
+
+// Middleware
 import {
-  extractClientInfo,
-  extractPinFromHeaders,
-  requirePinValidation,
-} from "../../_shared/pin-validation.ts";
-import { extractBearerToken } from "../../_shared/utils.ts";
+  dualAuthMiddleware,
+  errorMiddleware,
+  merchantResolverMiddleware,
+  getMerchantFromContext,
+} from "../../_shared/middleware/index.ts";
+
+// Services
+import { requirePinValidation } from "../../_shared/services/merchant.service.ts";
+import {
+  logWalletTransfer,
+  AuditAction,
+} from "../../_shared/services/audit.service.ts";
+
+// Schemas
+import {
+  TransactionRequestSchema,
+  StellarTransferSchema,
+  safeParseBody,
+} from "../../_shared/schemas/index.ts";
+
+// Utils
+import { extractPinFromHeaders, extractClientInfo } from "../../_shared/utils/helpers.ts";
+import { extractBearerToken } from "../../_shared/utils/jwt.utils.ts";
+import { rateLimitByMerchant, RATE_LIMITS } from "../../_shared/utils/rateLimit.utils.ts";
 import { submitSignedPaymentTx } from "./transfer.ts";
 import {
   getStellarErrorMessage as getStellarError,
@@ -17,8 +46,23 @@ import {
   submitSignedTrustlineTx,
 } from "./trustline.ts";
 
+// Types
+import type { TypedSupabaseClient } from "../../_shared/types/common.types.ts";
+import type { TransactionRequestInput, StellarTransferInput } from "../../_shared/schemas/index.ts";
+
+// Debug utilities
+import { walletLogger as logger } from "../../_shared/utils/debug.utils.ts";
+
+const debugLog = (step: string, data?: unknown) => logger.debug(step, data);
+const debugError = (step: string, error: unknown) => logger.error(step, error);
+const debugSuccess = (step: string, data?: unknown) => logger.success(step, data);
+
 const functionName = "wallets";
 const app = new Hono().basePath(`/${functionName}`);
+
+// ============================================================================
+// Types
+// ============================================================================
 
 interface WalletResponse {
   id: string;
@@ -42,27 +86,16 @@ interface TransactionConfig {
   authorizationPrivateKey: string;
 }
 
-interface TransactionRequest {
-  recipientAddress: string;
-  amount: number;
-  signature: string;
-  requestId?: string; // Optional request ID for idempotency
-}
-
 interface TransactionResult {
   hash: string;
   caip2: string;
   walletId: string;
 }
 
-interface RawSignResponse {
-  data?: {
-    signature?: string;
-    encoding?: string;
-  };
-}
+// ============================================================================
+// Constants
+// ============================================================================
 
-// --- CONSTANTS ---
 const DEFAULT_TRANSACTION_CONFIG: Omit<
   TransactionConfig,
   "recipientAddress" | "amountToSend"
@@ -70,10 +103,8 @@ const DEFAULT_TRANSACTION_CONFIG: Omit<
   decimals: 6, // USDC has 6 decimals
   usdcContractAddress: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", // USDC on Base
   chainId: "0x2105", // 8453
-  policyId: Deno.env.get("PRIVY_POLICY_ID") as string, // Policy for All Rules
-  authorizationPrivateKey: Deno.env.get(
-    "PRIVY_AUTHORIZATION_PRIVATE_KEY",
-  ) as string,
+  policyId: Deno.env.get("PRIVY_POLICY_ID") as string,
+  authorizationPrivateKey: Deno.env.get("PRIVY_AUTHORIZATION_PRIVATE_KEY") as string,
 };
 
 // In-memory cache for tracking recent transactions (prevents duplicates)
@@ -86,30 +117,24 @@ const transactionCache = new Map<string, {
 // Cache TTL: 5 minutes
 const CACHE_TTL = 5 * 60 * 1000;
 
-// --- DEBUGGING UTILITIES ---
-function debugLog(step: string, data?: unknown): void {
-  console.log(`🔍 [DEBUG] ${step}`, data ? JSON.stringify(data, null, 2) : "");
-}
+// ============================================================================
+// Apply Middleware Stack
+// ============================================================================
 
-function debugError(step: string, error: unknown): void {
-  console.error(`❌ [ERROR] ${step}:`, error);
-}
+app.use("*", cors(corsConfig));
+app.use("*", errorMiddleware);
+app.use("*", dualAuthMiddleware);
+app.use("*", merchantResolverMiddleware);
 
-function debugSuccess(step: string, data?: unknown): void {
-  console.log(
-    `✅ [SUCCESS] ${step}`,
-    data ? JSON.stringify(data, null, 2) : "",
-  );
-}
-
-// --- UTILITY FUNCTIONS ---
+// ============================================================================
+// Utility Functions
+// ============================================================================
 
 function generateBasicAuthHeader(username: string, password: string): string {
   const token = Buffer.from(`${username}:${password}`).toString("base64");
   return `Basic ${token}`;
 }
 
-// Generate a unique cache key for the transaction
 function generateCacheKey(
   walletId: string,
   recipientAddress: string,
@@ -117,18 +142,13 @@ function generateCacheKey(
   signature: string,
   requestId?: string,
 ): string {
-  // Use requestId if provided, otherwise create a hash from transaction details
   if (requestId) {
     return `req:${requestId}`;
   }
-
-  // Create a deterministic hash from transaction details
-  const transactionData =
-    `${walletId}:${recipientAddress}:${amount}:${signature}`;
+  const transactionData = `${walletId}:${recipientAddress}:${amount}:${signature}`;
   return `txn:${Buffer.from(transactionData).toString("base64")}`;
 }
 
-// Check if this transaction was already processed recently
 function checkDuplicateTransaction(
   cacheKey: string,
   walletId: string,
@@ -139,7 +159,6 @@ function checkDuplicateTransaction(
     return null;
   }
 
-  // Check if cache entry is still valid and for the same wallet
   const now = Date.now();
   if (now - cached.timestamp > CACHE_TTL || cached.walletId !== walletId) {
     transactionCache.delete(cacheKey);
@@ -156,7 +175,6 @@ function checkDuplicateTransaction(
   return cached.result;
 }
 
-// Store transaction result in cache
 function cacheTransactionResult(
   cacheKey: string,
   walletId: string,
@@ -167,128 +185,41 @@ function cacheTransactionResult(
     timestamp: Date.now(),
     walletId,
   });
-
-  debugLog("Cached transaction result", {
-    cacheKey,
-    walletId,
-    result,
-  });
 }
 
-// Clean up expired cache entries
 function cleanupExpiredCache(): void {
   const now = Date.now();
-  let cleanedCount = 0;
-
   for (const [key, value] of transactionCache.entries()) {
     if (now - value.timestamp > CACHE_TTL) {
       transactionCache.delete(key);
-      cleanedCount++;
     }
   }
-
-  if (cleanedCount > 0) {
-    debugLog("Cleaned up expired cache entries", { cleanedCount });
-  }
 }
 
-async function checkIfWalletHasOwner(
-  walletId: string,
-): Promise<WalletResponse> {
-  try {
-    debugLog("Checking wallet owner", { walletId });
+async function checkIfWalletHasOwner(walletId: string): Promise<WalletResponse> {
+  debugLog("Checking wallet owner", { walletId });
 
-    const res = await fetch(`https://api.privy.io/v1/wallets/${walletId}`, {
-      method: "GET",
-      headers: {
-        "Content-Type": "application/json",
-        "privy-app-id": Deno.env.get("PRIVY_APP_ID") as string,
-        Authorization: generateBasicAuthHeader(
-          Deno.env.get("PRIVY_APP_ID") as string,
-          Deno.env.get("PRIVY_APP_SECRET") as string,
-        ),
-      },
-    });
+  const res = await fetch(`https://api.privy.io/v1/wallets/${walletId}`, {
+    method: "GET",
+    headers: {
+      "Content-Type": "application/json",
+      "privy-app-id": Deno.env.get("PRIVY_APP_ID") as string,
+      Authorization: generateBasicAuthHeader(
+        Deno.env.get("PRIVY_APP_ID") as string,
+        Deno.env.get("PRIVY_APP_SECRET") as string,
+      ),
+    },
+  });
 
-    if (!res.ok) {
-      const errorData = await res.json();
-      debugError("Failed to fetch wallet owner", errorData);
-      throw new Error(
-        `Failed to fetch wallet owner: ${JSON.stringify(errorData)}`,
-      );
-    }
-
-    const response = await res.json();
-    debugSuccess("Wallet owner retrieved", { ownerId: response.owner_id });
-    return response;
-  } catch (e) {
-    debugError("Checking wallet owner failed", e);
-    throw new Error(
-      `Checking wallet owner failed: ${
-        e instanceof Error ? e.message : String(e)
-      }`,
-    );
-  }
-}
-
-// --- TRANSACTION HELPER FUNCTIONS ---
-
-function validateTransactionRequestBody(body: unknown): TransactionRequest {
-  debugLog("Validating transaction request body", body);
-
-  if (!body || typeof body !== "object") {
-    throw new Error("Request body must be an object");
+  if (!res.ok) {
+    const errorData = await res.json();
+    debugError("Failed to fetch wallet owner", errorData);
+    throw new Error(`Failed to fetch wallet owner: ${JSON.stringify(errorData)}`);
   }
 
-  const request = body as Record<string, unknown>;
-
-  if (
-    !request.signature || typeof request.signature !== "string"
-  ) {
-    throw new Error("signature is required and must be a string");
-  }
-
-  if (
-    !request.recipientAddress || typeof request.recipientAddress !== "string"
-  ) {
-    throw new Error("recipientAddress is required and must be a string");
-  }
-
-  if (
-    !request.amount || typeof request.amount !== "number" || request.amount <= 0
-  ) {
-    throw new Error("amount is required and must be a positive number");
-  }
-
-  // Basic Ethereum address validation
-  if (!/^0x[a-fA-F0-9]{40}$/.test(request.recipientAddress)) {
-    throw new Error("recipientAddress must be a valid Ethereum address");
-  }
-
-  const validatedRequest: TransactionRequest = {
-    recipientAddress: request.recipientAddress,
-    amount: request.amount,
-    signature: request.signature,
-    requestId: request.requestId as string | undefined,
-  };
-
-  debugSuccess("Transaction request body validated", validatedRequest);
-  return validatedRequest;
-}
-
-function createTransactionConfig(
-  request: TransactionRequest,
-): TransactionConfig {
-  debugLog("Creating transaction config", request);
-
-  const config: TransactionConfig = {
-    ...DEFAULT_TRANSACTION_CONFIG,
-    recipientAddress: request.recipientAddress,
-    amountToSend: request.amount,
-  };
-
-  debugSuccess("Transaction config created", config);
-  return config;
+  const response = await res.json();
+  debugSuccess("Wallet owner retrieved", { ownerId: response.owner_id });
+  return response;
 }
 
 async function validateTransactionRequest(
@@ -313,31 +244,6 @@ async function validateTransactionRequest(
   });
 
   return { token, walletOwner };
-}
-
-async function _signMessageForWallet(
-  privy: PrivyClient,
-  walletId: string,
-  token: string,
-  config: TransactionConfig,
-): Promise<string> {
-  debugLog("Signing message for wallet", { walletId });
-
-  const message =
-    `Transfer ${config.amountToSend} USDC to ${config.recipientAddress}`;
-
-  const response = await privy
-    .wallets()
-    .ethereum()
-    .signMessage(walletId, {
-      message,
-      authorization_context: {
-        user_jwts: [token],
-      },
-    });
-
-  debugSuccess("Message signed", { signature: response.signature });
-  return response.signature;
 }
 
 async function updateWalletWithPolicy(
@@ -421,383 +327,287 @@ async function sendTransaction(
   return result;
 }
 
-// --- MAIN TRANSACTION HANDLER ---
-async function handleTransactions(c: Context, walletId: string) {
-  debugLog("Starting transaction process", { walletId });
+// ============================================================================
+// PIN Validation Helper
+// ============================================================================
+
+async function validatePinIfRequired(
+  c: Context,
+  supabase: TypedSupabaseClient,
+  merchantId: string,
+  hasPinHash: boolean,
+): Promise<{ success: boolean; error?: string; statusCode?: number }> {
+  if (!hasPinHash) {
+    return { success: true };
+  }
+
+  const pinCode = extractPinFromHeaders(c.req.raw);
+
+  if (!pinCode) {
+    debugError("PIN code required for transaction", { merchantId });
+    return {
+      success: false,
+      error: "PIN code is required for wallet transaction operations",
+      statusCode: 400,
+    };
+  }
+
+  const { ipAddress, userAgent } = extractClientInfo(c.req.raw);
+
+  const pinValidation = await requirePinValidation({
+    supabase,
+    merchantId,
+    pinCode,
+    ipAddress,
+    userAgent,
+  });
+
+  if (!pinValidation.success) {
+    debugError("PIN validation failed", {
+      merchantId,
+      error: pinValidation.error,
+      attemptsRemaining: pinValidation.result?.attempts_remaining,
+    });
+    return {
+      success: false,
+      error: pinValidation.error || "PIN validation failed",
+      statusCode: 401,
+    };
+  }
+
+  debugSuccess("PIN validation successful", { merchantId });
+  return { success: true };
+}
+
+// ============================================================================
+// Route Handlers
+// ============================================================================
+
+/**
+ * POST /wallets/:walletId - EVM Transfer (USDC on Base)
+ */
+app.post("/:walletId", async (c) => {
+  const walletId = c.req.param("walletId");
+  debugLog("Starting EVM transaction process", { walletId });
+
+  // Check required environment variables
+  if (!Deno.env.get("PRIVY_POLICY_ID")) {
+    return c.json({ error: "Missing environment variables: PRIVY_POLICY_ID" }, 500);
+  }
+  if (!Deno.env.get("PRIVY_AUTHORIZATION_PRIVATE_KEY")) {
+    return c.json({ error: "Missing environment variables: PRIVY_AUTHORIZATION_PRIVATE_KEY" }, 500);
+  }
+
+  // Clean up expired cache entries
+  cleanupExpiredCache();
+
+  const supabase = c.get("supabase") as TypedSupabaseClient;
+  const merchant = getMerchantFromContext(c);
+
+  // Apply rate limiting for wallet transfers
+  try {
+    rateLimitByMerchant(merchant.merchant_id, "wallet_transfer", RATE_LIMITS.WITHDRAWAL);
+  } catch {
+    return c.json({
+      success: false,
+      error: "Too many transfer requests. Please try again later.",
+      code: "RATE_LIMIT_EXCEEDED",
+    }, 429);
+  }
+
+  // Parse and validate request body using Zod
+  const body = await c.req.json();
+  const validation = safeParseBody(TransactionRequestSchema, body);
+
+  if (!validation.success) {
+    return c.json({ success: false, error: validation.error }, 400);
+  }
+
+  const transactionRequest: TransactionRequestInput = validation.data;
+
+  // Check for duplicate transaction
+  const cacheKey = generateCacheKey(
+    walletId,
+    transactionRequest.recipientAddress,
+    transactionRequest.amount,
+    transactionRequest.signature,
+    transactionRequest.requestId,
+  );
+
+  const duplicateResult = checkDuplicateTransaction(cacheKey, walletId);
+  if (duplicateResult) {
+    debugLog("Returning cached transaction result", { cacheKey, duplicateResult });
+    return c.json({
+      success: true,
+      transaction: duplicateResult,
+      walletId,
+      recipientAddress: transactionRequest.recipientAddress,
+      amount: transactionRequest.amount,
+      cached: true,
+    });
+  }
+
+  // PIN validation if required
+  const pinCheck = await validatePinIfRequired(
+    c,
+    supabase,
+    merchant.merchant_id,
+    merchant.has_pin,
+  );
+
+  if (!pinCheck.success) {
+    return c.json({
+      success: false,
+      error: pinCheck.error,
+      code: "PIN_REQUIRED",
+    }, pinCheck.statusCode || 400);
+  }
+
+  // Log transfer initiation
+  logWalletTransfer(
+    supabase,
+    merchant.merchant_id,
+    AuditAction.WALLET_TRANSFER_INITIATED,
+    {
+      amount: transactionRequest.amount,
+      recipient: transactionRequest.recipientAddress,
+    },
+  );
 
   try {
-    // Clean up expired cache entries periodically
-    cleanupExpiredCache();
-
-    // Get authentication context from middleware
-    const supabase = c.get("supabase");
-    const userProviderId = c.get("dynamicId");
-    const isPrivyAuth = c.get("isPrivyAuth");
-
-    if (!userProviderId) {
-      debugError("Missing user provider ID from authentication", {});
-      return c.json({
-        error: "Authentication required",
-        details: "Unable to identify user",
-      }, 401);
-    }
-
-    // Check merchant status before allowing transaction
-    const merchantQuery = supabase
-      .from("merchants")
-      .select("merchant_id, status, pin_code_hash");
-
-    const { data: merchant, error: merchantError } = isPrivyAuth
-      ? await merchantQuery.eq("privy_id", userProviderId).single()
-      : await merchantQuery.eq("dynamic_id", userProviderId).single();
-
-    if (merchantError || !merchant) {
-      debugError("Merchant not found", {
-        merchantError,
-        userProviderId,
-        isPrivyAuth,
-      });
-      return c.json({
-        success: false,
-        error: "Merchant not found",
-      }, 404);
-    }
-
-    // Check merchant status (PIN_BLOCKED or INACTIVE)
-    if (merchant.status === "PIN_BLOCKED") {
-      debugError("Merchant account blocked", {
-        merchantId: merchant.merchant_id,
-        status: merchant.status,
-      });
-      return c.json({
-        success: false,
-        error: "Account blocked due to PIN security violations",
-        code: "PIN_BLOCKED",
-      }, 403);
-    }
-
-    if (merchant.status === "INACTIVE") {
-      debugError("Merchant account inactive", {
-        merchantId: merchant.merchant_id,
-        status: merchant.status,
-      });
-      return c.json({
-        success: false,
-        error: "Account is inactive",
-        code: "INACTIVE",
-      }, 403);
-    }
-
-    // Step 1: Parse and validate request body
-    const requestBody = await c.req.json();
-    const transactionRequest = validateTransactionRequestBody(requestBody);
-    const transactionConfig = createTransactionConfig(transactionRequest);
-
-    // Step 2: Check for duplicate transaction
-    const cacheKey = generateCacheKey(
-      walletId,
-      transactionRequest.recipientAddress,
-      transactionRequest.amount,
-      transactionRequest.signature,
-      transactionRequest.requestId,
-    );
-
-    const duplicateResult = checkDuplicateTransaction(cacheKey, walletId);
-    if (duplicateResult) {
-      debugLog("Returning cached transaction result", {
-        cacheKey,
-        duplicateResult,
-      });
-      return c.json({
-        success: true,
-        transaction: duplicateResult,
-        walletId: walletId,
-        recipientAddress: transactionConfig.recipientAddress,
-        amount: transactionConfig.amountToSend,
-        cached: true, // Indicate this is a cached result
-      });
-    }
-
-    // Step 3: PIN validation for wallet transactions (mandatory if PIN is set)
-    if (merchant.pin_code_hash) {
-      const pinCode = extractPinFromHeaders(c.req.raw);
-
-      if (!pinCode) {
-        debugError("PIN code required for transaction", {
-          merchantId: merchant.merchant_id,
-        });
-        return c.json({
-          success: false,
-          error: "PIN code is required for wallet transaction operations",
-          code: "PIN_REQUIRED",
-        }, 400);
-      }
-
-      const { ipAddress, userAgent } = extractClientInfo(c.req.raw);
-
-      // Validate PIN code
-      const pinValidation = await requirePinValidation({
-        supabase,
-        merchantId: merchant.merchant_id,
-        pinCode,
-        ipAddress,
-        userAgent,
-      });
-
-      if (!pinValidation.success) {
-        debugError("PIN validation failed", {
-          merchantId: merchant.merchant_id,
-          error: pinValidation.error,
-          attemptsRemaining: pinValidation.result?.attempts_remaining,
-        });
-        return c.json({
-          success: false,
-          error: pinValidation.error,
-          attempts_remaining: pinValidation.result?.attempts_remaining,
-          is_blocked: pinValidation.result?.is_blocked,
-        }, 401);
-      }
-
-      debugSuccess("PIN validation successful", {
-        merchantId: merchant.merchant_id,
-      });
-    }
-
-    // Step 4: Validate request and get wallet owner
+    // Validate wallet ownership
     const authHeader = c.req.header("Authorization");
-    const { token: _token, walletOwner } = await validateTransactionRequest(
-      authHeader ?? null,
-      walletId,
-    );
+    const { token, walletOwner } = await validateTransactionRequest(authHeader ?? null, walletId);
 
-    // Step 4: Initialize Privy client
-    const PRIVY_APP_ID = Deno.env.get("PRIVY_APP_ID")!;
-    const PRIVY_APP_SECRET = Deno.env.get("PRIVY_APP_SECRET")!;
-
+    // Initialize Privy client
     const privy = new PrivyClient({
-      appId: PRIVY_APP_ID,
-      appSecret: PRIVY_APP_SECRET,
+      appId: Deno.env.get("PRIVY_APP_ID")!,
+      appSecret: Deno.env.get("PRIVY_APP_SECRET")!,
     });
 
-    // Step 5: Sign message for wallet authorization
-    // const signature = await _signMessageForWallet(
-    //   privy,
-    //   walletId,
-    //   token,
-    //   transactionConfig,
-    // );
+    // Create transaction config
+    const transactionConfig: TransactionConfig = {
+      ...DEFAULT_TRANSACTION_CONFIG,
+      recipientAddress: transactionRequest.recipientAddress,
+      amountToSend: transactionRequest.amount,
+    };
 
-    // Step 6: Update wallet with policy
+    // Update wallet with policy
     await updateWalletWithPolicy(
       privy,
       walletId,
-      _token,
+      token,
       transactionRequest.signature,
       walletOwner.owner_id,
       transactionConfig.policyId,
     );
 
-    // Step 7: Encode transfer data
+    // Encode and send transaction
     const encodedData = encodeTransferData(transactionConfig);
-
-    // Step 8: Send transaction
     const transactionResult = await sendTransaction(
       privy,
       walletId,
-      _token,
+      token,
       transactionRequest.signature,
       transactionConfig,
       encodedData,
     );
 
-    // Step 9: Cache the transaction result
+    // Cache the result
     cacheTransactionResult(cacheKey, walletId, transactionResult);
+
+    // Log successful transfer
+    logWalletTransfer(
+      supabase,
+      merchant.merchant_id,
+      AuditAction.WALLET_TRANSFER_COMPLETED,
+      {
+        amount: transactionRequest.amount,
+        recipient: transactionRequest.recipientAddress,
+        txHash: transactionResult.hash,
+      },
+    );
 
     debugSuccess("Transaction completed successfully", transactionResult);
 
     return c.json({
       success: true,
       transaction: transactionResult,
-      walletId: walletId,
+      walletId,
       recipientAddress: transactionConfig.recipientAddress,
       amount: transactionConfig.amountToSend,
     });
   } catch (error) {
     debugError("Transaction failed", error);
-    const errorMessage = error instanceof Error
-      ? error.message
-      : "Unknown error";
 
+    // Log failed transfer
+    logWalletTransfer(
+      supabase,
+      merchant.merchant_id,
+      AuditAction.WALLET_TRANSFER_FAILED,
+      {
+        amount: transactionRequest.amount,
+        recipient: transactionRequest.recipientAddress,
+      },
+    );
+
+    const errorMessage = error instanceof Error ? error.message : "Unknown error";
     return c.json({
       error: "Failed to process wallet transaction",
       details: errorMessage,
     }, 500);
   }
-}
+});
 
-// Configure CORS
-app.use(
-  "*",
-  cors({
-    origin: "*",
-    allowHeaders: [
-      "authorization",
-      "x-client-info",
-      "apikey",
-      "content-type",
-      "x-pin-code",
-    ],
-    allowMethods: ["POST", "GET", "OPTIONS"],
-  }),
-);
+/**
+ * POST /wallets/:walletId/enable-usdc - Enable USDC trustline on Stellar
+ */
+app.post("/:walletId/enable-usdc", async (c) => {
+  const walletId = c.req.param("walletId");
+  debugLog("Enable USDC - start", { walletId });
 
-app.options("*", (c) => c.text("ok"));
+  const supabase = c.get("supabase") as TypedSupabaseClient;
+  const merchant = getMerchantFromContext(c);
 
-// Set Middleware
-app.use(dualAuthMiddleware);
+  // PIN validation if required
+  const pinCheck = await validatePinIfRequired(
+    c,
+    supabase,
+    merchant.merchant_id,
+    merchant.has_pin,
+  );
 
-// Routes
-app.post(
-  "/:walletId",
-  (c) => {
-    if (!Deno.env.get("PRIVY_POLICY_ID")) {
-      return c.json(
-        { error: `Missing environment variables: PRIVY_POLICY_ID` },
-        500,
-      );
-    }
+  if (!pinCheck.success) {
+    return c.json({
+      success: false,
+      error: pinCheck.error,
+      code: "PIN_REQUIRED",
+    }, pinCheck.statusCode || 400);
+  }
 
-    if (!Deno.env.get("PRIVY_AUTHORIZATION_PRIVATE_KEY")) {
-      return c.json({
-        error: `Missing environment variables: PRIVY_AUTHORIZATION_PRIVATE_KEY`,
-      }, 500);
-    }
-
-    return handleTransactions(c, c.req.param("walletId"));
-  },
-);
-
-async function handleEnableUsdc(c: Context, walletId: string) {
   try {
-    debugLog("Enable USDC - start", { walletId });
-    // Get authentication context from middleware
-    const supabase = c.get("supabase");
-    const userProviderId = c.get("dynamicId");
-    const isPrivyAuth = c.get("isPrivyAuth");
-
-    if (!userProviderId) {
-      debugError("Enable USDC - missing user provider id", {});
-      return c.json({ success: false, error: "Authentication required" }, 401);
-    }
-
-    // Check merchant status before allowing trustline
-    debugLog("Enable USDC - verifying merchant", {
-      userProviderId,
-      isPrivyAuth,
-    });
-    const merchantQuery = supabase
-      .from("merchants")
-      .select("merchant_id, status, pin_code_hash");
-
-    const { data: merchant, error: merchantError } = isPrivyAuth
-      ? await merchantQuery.eq("privy_id", userProviderId).single()
-      : await merchantQuery.eq("dynamic_id", userProviderId).single();
-
-    if (merchantError || !merchant) {
-      debugError("Enable USDC - merchant not found", { merchantError });
-      return c.json({ success: false, error: "Merchant not found" }, 404);
-    }
-
-    if (merchant.status === "PIN_BLOCKED") {
-      debugError("Enable USDC - merchant blocked", {
-        merchantId: merchant.merchant_id,
-      });
-      return c.json({
-        success: false,
-        error: "Account blocked due to PIN security violations",
-        code: "PIN_BLOCKED",
-      }, 403);
-    }
-    if (merchant.status === "INACTIVE") {
-      debugError("Enable USDC - merchant inactive", {
-        merchantId: merchant.merchant_id,
-      });
-      return c.json({
-        success: false,
-        error: "Account is inactive",
-        code: "INACTIVE",
-      }, 403);
-    }
-    debugSuccess("Enable USDC - merchant verified", {
-      merchantId: merchant.merchant_id,
-    });
-
-    // PIN validation if PIN is set
-    if (merchant.pin_code_hash) {
-      const pinCode = extractPinFromHeaders(c.req.raw);
-      if (!pinCode) {
-        debugError("Enable USDC - missing PIN header", {
-          merchantId: merchant.merchant_id,
-        });
-        return c.json({
-          success: false,
-          error: "PIN code is required for wallet transaction operations",
-          code: "PIN_REQUIRED",
-        }, 400);
-      }
-      const { ipAddress, userAgent } = extractClientInfo(c.req.raw);
-      const pinValidation = await requirePinValidation({
-        supabase,
-        merchantId: merchant.merchant_id,
-        pinCode,
-        ipAddress,
-        userAgent,
-      });
-      if (!pinValidation.success) {
-        debugError("Enable USDC - PIN validation failed", {
-          merchantId: merchant.merchant_id,
-          attempts_remaining: pinValidation.result?.attempts_remaining,
-          is_blocked: pinValidation.result?.is_blocked,
-        });
-        return c.json({
-          success: false,
-          error: pinValidation.error,
-          attempts_remaining: pinValidation.result?.attempts_remaining,
-          is_blocked: pinValidation.result?.is_blocked,
-        }, 401);
-      }
-      debugSuccess("Enable USDC - PIN validation successful", {
-        merchantId: merchant.merchant_id,
-      });
-    }
-
-    // Validate wallet ownership and fetch address
+    // Validate wallet ownership
     const authHeader = c.req.header("Authorization");
-    const { token, walletOwner } = await validateTransactionRequest(
-      authHeader ?? null,
-      walletId,
-    );
-    if (!walletOwner.owner_id || !walletOwner.address) {
-      debugError("Enable USDC - wallet not found or missing address", {
-        walletId,
-      });
+    const { token, walletOwner } = await validateTransactionRequest(authHeader ?? null, walletId);
+
+    if (!walletOwner.address) {
+      debugError("Enable USDC - wallet missing address", { walletId });
       return c.json({
         success: false,
         error: "Wallet not found or missing address",
       }, 404);
     }
+
     debugSuccess("Enable USDC - wallet verified", {
       ownerId: walletOwner.owner_id,
       address: walletOwner.address,
     });
 
-    const publicKey = walletOwner.address;
-
-    // Submit to Stellar network
+    // Submit trustline to Stellar network
     const submission = await submitSignedTrustlineTx({
       token,
       walletId,
-      signerPublicKey: publicKey,
+      signerPublicKey: walletOwner.address,
     });
 
     if (submission.successful) {
@@ -826,169 +636,91 @@ async function handleEnableUsdc(c: Context, walletId: string) {
     debugError("Enable USDC - unhandled error", e);
     return c.json({ success: false, error: message }, 500);
   }
-}
-
-app.post("/:walletId/enable-usdc", (c) => {
-  return handleEnableUsdc(c, c.req.param("walletId"));
 });
 
-async function handleStellarTransfer(c: Context, walletId: string) {
+/**
+ * POST /wallets/:walletId/stellar-transfer - Transfer USDC on Stellar
+ */
+app.post("/:walletId/stellar-transfer", async (c) => {
+  const walletId = c.req.param("walletId");
+  debugLog("Stellar Transfer - start", { walletId });
+
+  const supabase = c.get("supabase") as TypedSupabaseClient;
+  const merchant = getMerchantFromContext(c);
+
+  // Apply rate limiting for wallet transfers
   try {
-    debugLog("Stellar Transfer - start", { walletId });
+    rateLimitByMerchant(merchant.merchant_id, "stellar_transfer", RATE_LIMITS.WITHDRAWAL);
+  } catch {
+    return c.json({
+      success: false,
+      error: "Too many transfer requests. Please try again later.",
+      code: "RATE_LIMIT_EXCEEDED",
+    }, 429);
+  }
 
-    // Get authentication context from middleware
-    const supabase = c.get("supabase");
-    const userProviderId = c.get("dynamicId");
-    const isPrivyAuth = c.get("isPrivyAuth");
+  // Parse and validate request body using Zod
+  const body = await c.req.json();
+  const validation = safeParseBody(StellarTransferSchema, body);
 
-    if (!userProviderId) {
-      debugError("Stellar Transfer - missing user provider id", {});
-      return c.json({ success: false, error: "Authentication required" }, 401);
-    }
+  if (!validation.success) {
+    return c.json({ success: false, error: validation.error }, 400);
+  }
 
-    // Check merchant status before allowing transfer
-    debugLog("Stellar Transfer - verifying merchant", {
-      userProviderId,
-      isPrivyAuth,
-    });
-    const merchantQuery = supabase
-      .from("merchants")
-      .select("merchant_id, status, pin_code_hash");
+  const transferRequest: StellarTransferInput = validation.data;
 
-    const { data: merchant, error: merchantError } = isPrivyAuth
-      ? await merchantQuery.eq("privy_id", userProviderId).single()
-      : await merchantQuery.eq("dynamic_id", userProviderId).single();
+  // PIN validation if required
+  const pinCheck = await validatePinIfRequired(
+    c,
+    supabase,
+    merchant.merchant_id,
+    merchant.has_pin,
+  );
 
-    if (merchantError || !merchant) {
-      debugError("Stellar Transfer - merchant not found", { merchantError });
-      return c.json({ success: false, error: "Merchant not found" }, 404);
-    }
+  if (!pinCheck.success) {
+    return c.json({
+      success: false,
+      error: pinCheck.error,
+      code: "PIN_REQUIRED",
+    }, pinCheck.statusCode || 400);
+  }
 
-    if (merchant.status === "PIN_BLOCKED") {
-      debugError("Stellar Transfer - merchant blocked", {
-        merchantId: merchant.merchant_id,
-      });
-      return c.json({
-        success: false,
-        error: "Account blocked due to PIN security violations",
-        code: "PIN_BLOCKED",
-      }, 403);
-    }
-    if (merchant.status === "INACTIVE") {
-      debugError("Stellar Transfer - merchant inactive", {
-        merchantId: merchant.merchant_id,
-      });
-      return c.json({
-        success: false,
-        error: "Account is inactive",
-        code: "INACTIVE",
-      }, 403);
-    }
-    debugSuccess("Stellar Transfer - merchant verified", {
-      merchantId: merchant.merchant_id,
-    });
+  // Log transfer initiation
+  logWalletTransfer(
+    supabase,
+    merchant.merchant_id,
+    AuditAction.WALLET_TRANSFER_INITIATED,
+    {
+      amount: parseFloat(transferRequest.amount),
+      recipient: transferRequest.destinationAddress,
+    },
+  );
 
-    // PIN validation if PIN is set
-    if (merchant.pin_code_hash) {
-      const pinCode = extractPinFromHeaders(c.req.raw);
-      if (!pinCode) {
-        debugError("Stellar Transfer - missing PIN header", {
-          merchantId: merchant.merchant_id,
-        });
-        return c.json({
-          success: false,
-          error: "PIN code is required for wallet transaction operations",
-          code: "PIN_REQUIRED",
-        }, 400);
-      }
-      const { ipAddress, userAgent } = extractClientInfo(c.req.raw);
-      const pinValidation = await requirePinValidation({
-        supabase,
-        merchantId: merchant.merchant_id,
-        pinCode,
-        ipAddress,
-        userAgent,
-      });
-      if (!pinValidation.success) {
-        debugError("Stellar Transfer - PIN validation failed", {
-          merchantId: merchant.merchant_id,
-          attempts_remaining: pinValidation.result?.attempts_remaining,
-          is_blocked: pinValidation.result?.is_blocked,
-        });
-        return c.json({
-          success: false,
-          error: pinValidation.error,
-          attempts_remaining: pinValidation.result?.attempts_remaining,
-          is_blocked: pinValidation.result?.is_blocked,
-        }, 401);
-      }
-      debugSuccess("Stellar Transfer - PIN validation successful", {
-        merchantId: merchant.merchant_id,
-      });
-    }
-
-    // Parse request body
-    const requestBody = await c.req.json();
-    const { destinationAddress, amount } = requestBody as {
-      destinationAddress?: string;
-      amount?: string | number;
-    };
-
-    if (!destinationAddress || typeof destinationAddress !== "string") {
-      return c.json({
-        success: false,
-        error: "destinationAddress is required and must be a string",
-      }, 400);
-    }
-
-    if (!amount) {
-      return c.json({
-        success: false,
-        error: "amount is required",
-      }, 400);
-    }
-
-    // Convert amount to string if it's a number
-    const amountStr = typeof amount === "number" ? amount.toString() : amount;
-
-    // Validate destination address format (Stellar public key)
-    if (!/^G[A-Z0-9]{55}$/.test(destinationAddress)) {
-      return c.json({
-        success: false,
-        error:
-          "Invalid destination address format. Must be a valid Stellar public key (G...)",
-      }, 400);
-    }
-
-    // Validate wallet ownership and fetch address
+  try {
+    // Validate wallet ownership
     const authHeader = c.req.header("Authorization");
-    const { token, walletOwner } = await validateTransactionRequest(
-      authHeader ?? null,
-      walletId,
-    );
-    if (!walletOwner.owner_id || !walletOwner.address) {
-      debugError("Stellar Transfer - wallet not found or missing address", {
-        walletId,
-      });
+    const { token, walletOwner } = await validateTransactionRequest(authHeader ?? null, walletId);
+
+    if (!walletOwner.address) {
+      debugError("Stellar Transfer - wallet missing address", { walletId });
       return c.json({
         success: false,
         error: "Wallet not found or missing address",
       }, 404);
     }
+
     debugSuccess("Stellar Transfer - wallet verified", {
       ownerId: walletOwner.owner_id,
       address: walletOwner.address,
     });
 
-    const publicKey = walletOwner.address;
-
     // Submit payment to Stellar network
     const submission = await submitSignedPaymentTx({
       token,
       walletId,
-      signerPublicKey: publicKey,
-      destinationAddress,
-      amount: amountStr,
+      signerPublicKey: walletOwner.address,
+      destinationAddress: transferRequest.destinationAddress,
+      amount: transferRequest.amount,
     });
 
     if (submission.successful) {
@@ -996,29 +728,57 @@ async function handleStellarTransfer(c: Context, walletId: string) {
         hash: submission.hash,
         ledger: submission.ledger,
       });
-      return c.json({
-        success: true,
-        result: submission,
-      }, 200);
+
+      // Log successful transfer
+      logWalletTransfer(
+        supabase,
+        merchant.merchant_id,
+        AuditAction.WALLET_TRANSFER_COMPLETED,
+        {
+          amount: parseFloat(transferRequest.amount),
+          recipient: transferRequest.destinationAddress,
+          txHash: submission.hash,
+        },
+      );
+
+      return c.json({ success: true, result: submission }, 200);
     }
 
     debugError("Stellar Transfer - submission failed", submission.raw);
-    return c.json(
+
+    // Log failed transfer
+    logWalletTransfer(
+      supabase,
+      merchant.merchant_id,
+      AuditAction.WALLET_TRANSFER_FAILED,
       {
-        success: false,
-        error: submission.errorMessage || getStellarError(submission.raw),
+        amount: parseFloat(transferRequest.amount),
+        recipient: transferRequest.destinationAddress,
       },
+    );
+
+    return c.json(
+      { success: false, error: submission.errorMessage || getStellarError(submission.raw) },
       400,
     );
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     debugError("Stellar Transfer - unhandled error", e);
+
+    // Log failed transfer
+    logWalletTransfer(
+      supabase,
+      merchant.merchant_id,
+      AuditAction.WALLET_TRANSFER_FAILED,
+      {
+        amount: parseFloat(transferRequest.amount),
+        recipient: transferRequest.destinationAddress,
+      },
+    );
+
     return c.json({ success: false, error: message }, 500);
   }
-}
-
-app.post("/:walletId/stellar-transfer", (c) => {
-  return handleStellarTransfer(c, c.req.param("walletId"));
 });
 
+// Export for Deno
 Deno.serve(app.fetch);

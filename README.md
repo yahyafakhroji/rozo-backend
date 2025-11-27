@@ -60,7 +60,7 @@ See [Deployment Guide](docs/deployment.md) for complete environment setup.
 
 Required variables:
 
-- `SUPABASE_URL` & `SUPABASE_SERVICE_ROLE_KEY`
+- `ROZO_SUPABASE_URL` & `ROZO_SUPABASE_SERVICE_ROLE_KEY`
 - `DYNAMIC_ENV_ID` & `PRIVY_APP_ID` & `PRIVY_APP_SECRET`
 - `DAIMO_*` variables for payment processing
 - `PUSHER_*` variables for notifications

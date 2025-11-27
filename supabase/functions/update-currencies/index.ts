@@ -1,38 +1,36 @@
-import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+/**
+ * Update Currencies Cron Job
+ * Fetches latest exchange rates and updates the database
+ */
 
-// Define the currencies we want to update
+import { Hono } from "jsr:@hono/hono";
+import { cors } from "jsr:@hono/hono/cors";
+
+// Config
+import { corsConfig } from "../../_shared/config/index.ts";
+
+// Utils
+import { createSupabaseClient } from "../../_shared/utils/supabase.utils.ts";
+
+const app = new Hono().basePath("/update-currencies");
+
+// Apply CORS
+app.use("*", cors(corsConfig));
+
+// ============================================================================
+// Constants
+// ============================================================================
+
 const CURRENCIES_TO_UPDATE = ["MYR", "SGD", "IDR"];
 const BASE_CURRENCY = "USD";
-
-// Define the API URL for ExchangeRate-API
 const EXCHANGE_RATE_API_URL = "https://api.exchangerate-api.com/v4/latest/USD";
 
-// Define the Supabase client
-const supabaseClient = () => {
-  const supabaseUrl = Deno.env.get("SUPABASE_URL") as string;
-  const supabaseServiceKey = Deno.env.get(
-    "SUPABASE_SERVICE_ROLE_KEY",
-  ) as string;
-
-  return createClient(supabaseUrl, supabaseServiceKey, {
-    auth: {
-      persistSession: false,
-      autoRefreshToken: false,
-    },
-  });
-};
-
-// Define the CORS headers
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers":
-    "authorization, x-client-info, apikey, content-type",
-};
+// ============================================================================
+// Helper Functions
+// ============================================================================
 
 /**
  * Fetches the latest currency exchange rates from ExchangeRate-API
- * @returns Object containing exchange rates with USD as base
  */
 async function fetchExchangeRates(): Promise<Record<string, number>> {
   try {
@@ -54,23 +52,19 @@ async function fetchExchangeRates(): Promise<Record<string, number>> {
 
 /**
  * Updates currency rates in the database
- * @param supabase Supabase client
- * @param rates Exchange rates data
  */
 async function updateCurrencyRates(
-  supabase: any,
+  supabase: ReturnType<typeof createSupabaseClient>,
   rates: Record<string, number>,
 ): Promise<{ success: boolean; updated: string[]; errors: string[] }> {
   const updated: string[] = [];
   const errors: string[] = [];
 
-  // For each currency in our list
   for (const currencyId of CURRENCIES_TO_UPDATE) {
     try {
-      // USD is always 1
-      const usdPrice = currencyId === BASE_CURRENCY ? 1 : 1 / rates[currencyId]; // Convert to USD value (e.g., 1 USD = X Currency)
+      // USD is always 1, convert rate to USD value
+      const usdPrice = currencyId === BASE_CURRENCY ? 1 : 1 / rates[currencyId];
 
-      // Update the currency in the database
       const { error } = await supabase
         .from("currencies")
         .update({
@@ -86,9 +80,7 @@ async function updateCurrencyRates(
       updated.push(currencyId);
     } catch (error) {
       console.error(`Error updating ${currencyId}:`, error);
-      const errorMessage = error instanceof Error
-        ? error.message
-        : "Unknown error";
+      const errorMessage = error instanceof Error ? error.message : "Unknown error";
       errors.push(`${currencyId}: ${errorMessage}`);
     }
   }
@@ -100,67 +92,45 @@ async function updateCurrencyRates(
   };
 }
 
-// Handle the request
-serve(async (req) => {
-  // This enables the function to be invoked as a Cron job
-  if (req.method === "POST") {
-    try {
-      const supabase = supabaseClient();
+// ============================================================================
+// Route Handlers
+// ============================================================================
 
-      // Fetch the latest exchange rates
-      const rates = await fetchExchangeRates();
+/**
+ * POST /update-currencies - Cron job endpoint
+ */
+app.post("/", async (c) => {
+  try {
+    const supabase = createSupabaseClient();
 
-      // Update the currency rates in the database
-      const result = await updateCurrencyRates(supabase, rates);
+    // Fetch the latest exchange rates
+    const rates = await fetchExchangeRates();
 
-      // Return the result
-      return new Response(
-        JSON.stringify({
-          success: result.success,
-          message: "Currency rates updated successfully",
-          updated: result.updated,
-          errors: result.errors,
-          timestamp: new Date().toISOString(),
-        }),
-        {
-          status: result.success ? 200 : 207, // 207 Multi-Status if some updates failed
-          headers: {
-            "Content-Type": "application/json",
-            ...corsHeaders,
-          },
-        },
-      );
-    } catch (error) {
-      // Handle any errors
-      return new Response(
-        JSON.stringify({
-          success: false,
-          message: "Failed to update currency rates",
-          error: error instanceof Error ? error.message : "Unknown error",
-          timestamp: new Date().toISOString(),
-        }),
-        {
-          status: 500,
-          headers: {
-            "Content-Type": "application/json",
-            ...corsHeaders,
-          },
-        },
-      );
-    }
+    // Update the currency rates in the database
+    const result = await updateCurrencyRates(supabase, rates);
+
+    return c.json({
+      success: result.success,
+      message: "Currency rates updated successfully",
+      updated: result.updated,
+      errors: result.errors,
+      timestamp: new Date().toISOString(),
+    }, result.success ? 200 : 207);
+  } catch (error) {
+    return c.json({
+      success: false,
+      message: "Failed to update currency rates",
+      error: error instanceof Error ? error.message : "Unknown error",
+      timestamp: new Date().toISOString(),
+    }, 500);
   }
-
-  // Handle OPTIONS request for CORS
-  if (req.method === "OPTIONS") {
-    return new Response("ok", { headers: corsHeaders });
-  }
-
-  // Return 405 for other methods
-  return new Response(JSON.stringify({ error: "Method not allowed" }), {
-    status: 405,
-    headers: {
-      "Content-Type": "application/json",
-      ...corsHeaders,
-    },
-  });
 });
+
+// Handle OPTIONS for CORS
+app.options("*", (c) => c.text("ok"));
+
+// Not allowed methods
+app.all("*", (c) => c.json({ error: "Method not allowed" }, 405));
+
+// Export for Deno
+Deno.serve(app.fetch);

@@ -9,26 +9,18 @@ import {
   Transaction,
   TransactionBuilder,
 } from "stellar-sdk";
-import { getMainnetServer, USDC_ASSET, USDC_ISSUER } from "./trustline.ts";
+import {
+  getMainnetServer,
+  getStellarErrorMessage,
+  USDC_ASSET,
+  USDC_ISSUER,
+} from "./trustline.ts";
 
-// --- DEBUG HELPERS ---
-function debugLog(step: string, data?: unknown): void {
-  console.log(
-    `🔍 [STELLAR_TRANSFER] ${step}`,
-    data ? JSON.stringify(data, null, 2) : "",
-  );
-}
-
-function debugError(step: string, error: unknown): void {
-  console.error(`❌ [STELLAR_TRANSFER] ${step}:`, error);
-}
-
-function debugSuccess(step: string, data?: unknown): void {
-  console.log(
-    `✅ [STELLAR_TRANSFER] ${step}`,
-    data ? JSON.stringify(data, null, 2) : "",
-  );
-}
+// Debug utilities
+import { stellarTransferLogger as logger } from "../../_shared/utils/debug.utils.ts";
+const debugLog = (step: string, data?: unknown) => logger.debug(step, data);
+const debugError = (step: string, error: unknown) => logger.error(step, error);
+const debugSuccess = (step: string, data?: unknown) => logger.success(step, data);
 
 export interface BuildPaymentResult {
   xdr: string; // base64-encoded transaction envelope
@@ -245,32 +237,3 @@ export async function submitSignedPaymentTx(
   }
 }
 
-// --- ERROR HELPERS ---
-
-/**
- * Produce a user-friendly Stellar error message from Horizon response bodies.
- */
-function getStellarErrorMessage(data: unknown): string {
-  try {
-    const obj = data as Record<string, unknown>;
-    const title = (obj?.title as string) || (obj as {
-      extras?: { result_codes?: { transaction?: string } };
-    })?.extras?.result_codes?.transaction;
-    const detail = obj?.detail as string | undefined;
-    const opCodes = (obj as {
-      extras?: { result_codes?: { operations?: string[] } };
-    })?.extras?.result_codes?.operations as string[] | undefined;
-
-    if (opCodes && opCodes.length > 0) {
-      return `Stellar error: ${opCodes.join(", ")}`;
-    }
-
-    if (title || detail) {
-      return `Stellar error: ${[title, detail].filter(Boolean).join(" - ")}`;
-    }
-
-    return "Failed to submit transaction to Stellar";
-  } catch (_) {
-    return "Failed to submit transaction to Stellar";
-  }
-}

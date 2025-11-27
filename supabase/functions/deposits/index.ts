@@ -1,400 +1,205 @@
-import { Context, Hono } from "jsr:@hono/hono";
+/**
+ * Deposits Function
+ * Handles deposit creation and listing
+ * Refactored to use new middleware, factories, and type-safe utilities
+ */
+
+import { Hono } from "jsr:@hono/hono";
 import { cors } from "jsr:@hono/hono/cors";
-import { dualAuthMiddleware } from "../../_shared/dual-auth-middleware.ts";
-import { createDeposit, CreateDepositRequest } from "./utils.ts";
 
-const functionName = "deposits";
-const app = new Hono().basePath(`/${functionName}`);
+// Config
+import { corsConfig } from "../../_shared/config/index.ts";
 
-// Business Logic
-async function handleGetAllDeposits(c: Context) {
-  try {
-    const supabase = c.get("supabase");
-    const dynamicId = c.get("dynamicId");
-    const isPrivyAuth = c.get("isPrivyAuth");
+// Middleware
+import {
+  dualAuthMiddleware,
+  errorMiddleware,
+  notFoundHandler,
+  merchantResolverMiddleware,
+  getMerchantFromContext,
+} from "../../_shared/middleware/index.ts";
 
-    const merchantQuery = supabase
-      .from("merchants")
-      .select(`merchant_id, status`);
+// Services
+import { getPaymentQrCodeUrl } from "../../_shared/services/payment.service.ts";
 
-    // Use appropriate column based on auth provider
-    const { data: merchant, error: merchantError } = isPrivyAuth
-      ? await merchantQuery.eq("privy_id", dynamicId).single()
-      : await merchantQuery.eq("dynamic_id", dynamicId).single();
+// Factories
+import { createTransaction } from "../../_shared/factories/transactionFactory.ts";
 
-    if (merchantError || !merchant) {
-      return c.json(
-        { success: false, error: merchantError.message },
-        404,
-      );
+// Schemas
+import {
+  CreateDepositSchema,
+  PaginationSchema,
+  OrderStatusSchema,
+  safeParseBody,
+} from "../../_shared/schemas/index.ts";
+
+// Types
+import type { TypedSupabaseClient } from "../../_shared/types/common.types.ts";
+
+const app = new Hono().basePath("/deposits");
+
+// Apply middleware stack
+app.use("*", cors(corsConfig));
+app.use("*", errorMiddleware);
+app.use("*", dualAuthMiddleware);
+app.use("*", merchantResolverMiddleware);
+
+// ============================================================================
+// Route Handlers
+// ============================================================================
+
+/**
+ * GET /deposits - Get all deposits for merchant
+ */
+app.get("/", async (c) => {
+  const supabase = c.get("supabase") as TypedSupabaseClient;
+  const merchant = getMerchantFromContext(c);
+
+  // Parse and validate query parameters
+  const url = new URL(c.req.url);
+  const paginationResult = safeParseBody(PaginationSchema, {
+    limit: url.searchParams.get("limit") || undefined,
+    offset: url.searchParams.get("offset") || undefined,
+  });
+
+  if (!paginationResult.success) {
+    return c.json({ success: false, error: paginationResult.error }, 400);
+  }
+
+  const { limit, offset } = paginationResult.data;
+
+  // Parse status filter
+  const statusParam = url.searchParams.get("status");
+  let statusFilter: string | null = null;
+
+  if (statusParam) {
+    const statusResult = safeParseBody(OrderStatusSchema, statusParam);
+    if (!statusResult.success) {
+      return c.json({ success: false, error: statusResult.error }, 400);
     }
+    statusFilter = statusResult.data;
+  }
 
-    // Check merchant status (PIN_BLOCKED or INACTIVE)
-    if (merchant.status === "PIN_BLOCKED") {
-      return c.json(
-        {
-          success: false,
-          error: "Account blocked due to PIN security violations",
-          code: "PIN_BLOCKED",
-        },
-        403,
-      );
+  // Build query with status filter
+  const applyStatusFilter = (query: ReturnType<typeof supabase.from>) => {
+    if (!statusFilter) return query;
+    if (statusFilter === "PENDING") {
+      return query.in("status", ["PENDING", "PROCESSING"]);
     }
+    return query.eq("status", statusFilter);
+  };
 
-    if (merchant.status === "INACTIVE") {
-      return c.json(
-        {
-          success: false,
-          error: "Account is inactive",
-          code: "INACTIVE",
-        },
-        403,
-      );
-    }
+  // Execute queries in parallel for better performance
+  const [countResult, depositsResult] = await Promise.all([
+    applyStatusFilter(
+      supabase
+        .from("deposits")
+        .select("*", { count: "exact", head: true })
+        .eq("merchant_id", merchant.merchant_id),
+    ),
+    applyStatusFilter(
+      supabase
+        .from("deposits")
+        .select("*")
+        .eq("merchant_id", merchant.merchant_id),
+    )
+      .order("created_at", { ascending: false })
+      .range(offset, offset + limit - 1),
+  ]);
 
-    // Extract parameters from URL
-    const url = new URL(c.req.url);
-    const limitParam = url.searchParams.get("limit");
-    const offsetParam = url.searchParams.get("offset");
-    const statusParam = url.searchParams.get("status");
+  const { count: totalCount } = countResult;
+  const { data: deposits, error } = depositsResult;
 
-    // Parse and validate limit (default: 10, max: 20)
-    let limit = 10; // default limit
-    if (limitParam) {
-      const parsedLimit = parseInt(limitParam, 10);
-      if (isNaN(parsedLimit) || parsedLimit < 1) {
-        return c.json(
-          { success: false, error: "Limit must be a positive integer" },
-          400,
-        );
-      }
-      limit = Math.min(parsedLimit, 20); // enforce maximum of 20
-    }
+  if (error) {
+    return c.json({ success: false, error: error.message }, 400);
+  }
 
-    // Parse and validate offset (default: 0)
-    let offset = 0; // default offset
-    if (offsetParam) {
-      const parsedOffset = parseInt(offsetParam, 10);
-      if (isNaN(parsedOffset) || parsedOffset < 0) {
-        return c.json(
-          { success: false, error: "Offset must be a non-negative integer" },
-          400,
-        );
-      }
-      offset = parsedOffset;
-    }
+  return c.json({
+    success: true,
+    deposits: deposits || [],
+    total: totalCount || 0,
+    offset,
+    limit,
+  });
+});
 
-    // Validate status parameter
-    const validStatuses = [
-      "pending",
-      "completed",
-      "failed",
-      "expired",
-      "discrepancy",
-    ];
-    if (statusParam && !validStatuses.includes(statusParam.toLowerCase())) {
-      return c.json(
-        {
-          success: false,
-          error:
-            "Status must be one of: pending, completed, failed, expired, discrepancy",
-        },
-        400,
-      );
-    }
+/**
+ * GET /deposits/:depositId - Get single deposit
+ */
+app.get("/:depositId", async (c) => {
+  const supabase = c.get("supabase") as TypedSupabaseClient;
+  const merchant = getMerchantFromContext(c);
+  const depositId = c.req.param("depositId");
 
-    // Helper function to apply status filter
-    const applyStatusFilter = (query: any) => {
-      if (!statusParam) return query;
+  // Get deposit
+  const { data: deposit, error } = await supabase
+    .from("deposits")
+    .select("*")
+    .eq("deposit_id", depositId)
+    .eq("merchant_id", merchant.merchant_id)
+    .single();
 
-      const status = statusParam.toLowerCase();
-      return status === "pending"
-        ? query.in("status", ["PENDING", "PROCESSING"])
-        : query.eq("status", statusParam.toUpperCase());
-    };
+  if (error || !deposit) {
+    return c.json({ success: false, error: "Deposit not found" }, 404);
+  }
 
-    // Get total count and paginated deposits in parallel
-    const [countResult, depositsResult] = await Promise.all([
-      applyStatusFilter(
-        supabase
-          .from("deposits")
-          .select("*", { count: "exact", head: true })
-          .eq("merchant_id", merchant.merchant_id),
-      ),
-      applyStatusFilter(
-        supabase
-          .from("deposits")
-          .select("*")
-          .eq("merchant_id", merchant.merchant_id),
-      )
-        .order("created_at", { ascending: false })
-        .range(offset, offset + limit - 1),
-    ]);
+  const qrcode = getPaymentQrCodeUrl(deposit.payment_id);
 
-    const { count: totalCount } = countResult;
-    const { data: deposits, error } = depositsResult;
+  return c.json({
+    success: true,
+    deposit: {
+      ...deposit,
+      qrcode,
+    },
+  });
+});
 
-    if (error) {
-      return c.json(
-        { success: false, error: error.message },
-        400,
-      );
-    }
+/**
+ * POST /deposits - Create new deposit
+ */
+app.post("/", async (c) => {
+  const supabase = c.get("supabase") as TypedSupabaseClient;
+  const merchant = getMerchantFromContext(c);
 
+  // Parse and validate request body
+  const body = await c.req.json();
+  const validation = safeParseBody(CreateDepositSchema, body);
+
+  if (!validation.success) {
+    return c.json({ success: false, error: validation.error }, 400);
+  }
+
+  // Create deposit using factory
+  const result = await createTransaction({
+    supabase,
+    merchant,
+    input: validation.data,
+    type: "deposit",
+  });
+
+  if (!result.success || !result.paymentDetail) {
+    const status = result.code ? 403 : 400;
     return c.json(
-      {
-        success: true,
-        deposits: deposits || [],
-        total: totalCount || 0,
-        offset: offset,
-        limit: limit,
-      },
-      200,
-    );
-  } catch (error) {
-    return c.json(
-      {
-        success: false,
-        error: `Server error: ${
-          error instanceof Error ? error.message : "Unknown error"
-        }`,
-      },
-      500,
+      { success: false, error: result.error, code: result.code },
+      status,
     );
   }
-}
 
-async function handleGetSingleDeposit(
-  c: Context,
-  depositId: string,
-) {
-  try {
-    const dynamicId = c.get("dynamicId");
-    const supabase = c.get("supabase");
-    const isPrivyAuth = c.get("isPrivyAuth");
+  const qrcode = getPaymentQrCodeUrl(result.paymentDetail.id);
 
-    const merchantQuery = supabase
-      .from("merchants")
-      .select(`merchant_id, status`);
+  return c.json(
+    {
+      success: true,
+      qrcode,
+      deposit_id: result.record_id,
+      message: "Deposit created successfully",
+    },
+    201,
+  );
+});
 
-    // Use appropriate column based on auth provider
-    const { data: merchant, error: merchantError } = isPrivyAuth
-      ? await merchantQuery.eq("privy_id", dynamicId).single()
-      : await merchantQuery.eq("dynamic_id", dynamicId).single();
+// Not found handler
+app.notFound(notFoundHandler);
 
-    if (merchantError || !merchant) {
-      return c.json(
-        { success: false, error: merchantError.message },
-        404,
-      );
-    }
-
-    // Check merchant status (PIN_BLOCKED or INACTIVE)
-    if (merchant.status === "PIN_BLOCKED") {
-      return c.json(
-        {
-          success: false,
-          error: "Account blocked due to PIN security violations",
-          code: "PIN_BLOCKED",
-        },
-        403,
-      );
-    }
-
-    if (merchant.status === "INACTIVE") {
-      return c.json(
-        {
-          success: false,
-          error: "Account is inactive",
-          code: "INACTIVE",
-        },
-        403,
-      );
-    }
-
-    const { data: deposit, error } = await supabase
-      .from("deposits")
-      .select("*")
-      .eq("deposit_id", depositId)
-      .eq("merchant_id", merchant.merchant_id)
-      .single();
-
-    if (error) {
-      return c.json(
-        { success: false, error: error.message },
-        404,
-      );
-    }
-
-    return c.json(
-      {
-        success: true,
-        deposit: deposit,
-      },
-      200,
-    );
-  } catch (error) {
-    return c.json(
-      {
-        success: false,
-        error: `Server error: ${
-          error instanceof Error ? error.message : "Unknown error"
-        }`,
-      },
-      500,
-    );
-  }
-}
-
-async function handleCreateDeposit(c: Context) {
-  try {
-    const dynamicId = c.get("dynamicId");
-    const supabase = c.get("supabase");
-    const isPrivyAuth = c.get("isPrivyAuth");
-
-    const merchantQuery = supabase
-      .from("merchants")
-      .select("merchant_id, status");
-
-    const { data: merchant, error: merchantError } = isPrivyAuth
-      ? await merchantQuery.eq("privy_id", dynamicId).single()
-      : await merchantQuery.eq("dynamic_id", dynamicId).single();
-
-    if (merchantError || !merchant) {
-      return {
-        merchant: null,
-        error: Response.json(
-          { success: false, error: "Merchant not found" },
-          {
-            status: 404,
-            headers: {
-              "Access-Control-Allow-Origin": "*",
-              "Access-Control-Allow-Headers":
-                "authorization, x-client-info, apikey, content-type",
-              "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
-            },
-          },
-        ),
-      };
-    }
-
-    // Check merchant status (PIN_BLOCKED or INACTIVE)
-    if (merchant.status === "PIN_BLOCKED") {
-      return c.json(
-        {
-          success: false,
-          error: "Account blocked due to PIN security violations",
-          code: "PIN_BLOCKED",
-        },
-        403,
-      );
-    }
-
-    if (merchant.status === "INACTIVE") {
-      return c.json(
-        {
-          success: false,
-          error: "Account is inactive",
-          code: "INACTIVE",
-        },
-        403,
-      );
-    }
-
-    const depositData: CreateDepositRequest = await c.req.json();
-
-    // Validate required fields
-    const requiredFields = ["display_currency", "display_amount"];
-
-    for (const field of requiredFields) {
-      if (!depositData[field as keyof CreateDepositRequest]) {
-        return c.json(
-          { success: false, error: `Missing required field: ${field}` },
-          400,
-        );
-      }
-    }
-
-    // Validate numeric fields
-    if (
-      typeof depositData.display_amount !== "number" ||
-      depositData.display_amount <= 0
-    ) {
-      return c.json(
-        {
-          success: false,
-          error: "display_amount must be a positive number",
-        },
-        400,
-      );
-    }
-
-    const result = await createDeposit(
-      supabase,
-      dynamicId,
-      isPrivyAuth,
-      depositData,
-    );
-
-    if (!result.success || !result.paymentDetail) {
-      return c.json(
-        { success: false, error: result.error || "Payment detail is missing" },
-        400,
-      );
-    }
-
-    const intentPayUrl = Deno.env.get("ROZO_PAY_URL");
-
-    if (!intentPayUrl) {
-      return c.json(
-        { success: false, error: "ROZO_PAY_URL is not set" },
-        500,
-      );
-    }
-
-    return c.json(
-      {
-        success: true,
-        qrcode: `${intentPayUrl}${result.paymentDetail.id}`,
-        deposit_id: result.deposit_id,
-        message: "Deposit created successfully",
-      },
-      201,
-    );
-  } catch (error) {
-    return c.json(
-      {
-        success: false,
-        error: `Server error: ${
-          error instanceof Error ? error.message : "Unknown error"
-        }`,
-      },
-      500,
-    );
-  }
-}
-
-// Configure CORS
-app.use(
-  "*",
-  cors({
-    origin: "*",
-    allowHeaders: ["authorization", "x-client-info", "apikey", "content-type"],
-    allowMethods: ["POST", "GET", "OPTIONS"],
-  }),
-);
-
-app.options("*", (c) => c.text("ok"));
-
-// Set Middleware
-app.use(dualAuthMiddleware);
-
-// Routes
-app.post("/", handleCreateDeposit);
-app.get("/", handleGetAllDeposits);
-app.get(
-  "/:depositId",
-  (c) => handleGetSingleDeposit(c, c.req.param("depositId")),
-);
-
+// Export for Deno
 Deno.serve(app.fetch);

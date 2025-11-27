@@ -24,6 +24,5 @@
   "editor.formatOnSave": true,
   "typescript.tsserver.experimental.enableProjectDiagnostics": false,
   "typescript.validate.enable": false,
-  "deno.path": "/Users/akbarsaputrait/.deno/bin/deno",
   "prettier.singleQuote": false
 }
