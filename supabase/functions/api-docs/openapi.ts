@@ -11,9 +11,7 @@ export const openApiSpec = {
 Rozo Backend API provides payment processing, merchant management, and wallet operations for the Rozo payment platform.
 
 ## Authentication
-Most endpoints require authentication using JWT tokens from either:
-- **Dynamic** - Web3 authentication provider
-- **Privy** - Embedded wallet authentication
+All endpoints require authentication using JWT tokens from **Privy** (embedded wallet authentication).
 
 Include the JWT token in the Authorization header:
 \`\`\`
@@ -45,6 +43,8 @@ X-Pin-Code: <6-digit-pin>
   ],
   tags: [
     { name: "Merchants", description: "Merchant profile and PIN management" },
+    { name: "Chains", description: "Supported blockchain networks" },
+    { name: "Merchant Wallets", description: "Multi-chain wallet management for merchants" },
     { name: "Orders", description: "Order creation and management" },
     { name: "Deposits", description: "Deposit operations" },
     { name: "Withdrawals", description: "Withdrawal history and requests" },
@@ -254,6 +254,235 @@ X-Pin-Code: <6-digit-pin>
             },
           },
           "401": { $ref: "#/components/responses/Unauthorized" },
+        },
+      },
+    },
+
+    // =========================================================================
+    // CHAINS
+    // =========================================================================
+    "/merchants/chains": {
+      get: {
+        tags: ["Chains"],
+        summary: "List supported chains",
+        description: "Get all active blockchain networks supported by the platform",
+        security: [{ BearerAuth: [] }],
+        responses: {
+          "200": {
+            description: "Chains retrieved successfully",
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/ChainListResponse" },
+              },
+            },
+          },
+          "401": { $ref: "#/components/responses/Unauthorized" },
+        },
+      },
+    },
+
+    // =========================================================================
+    // MERCHANT WALLETS
+    // =========================================================================
+    "/merchants/wallets": {
+      get: {
+        tags: ["Merchant Wallets"],
+        summary: "List merchant wallets",
+        description: "Get all wallets registered for the authenticated merchant across all chains",
+        security: [{ BearerAuth: [] }],
+        responses: {
+          "200": {
+            description: "Wallets retrieved successfully",
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/MerchantWalletListResponse" },
+              },
+            },
+          },
+          "401": { $ref: "#/components/responses/Unauthorized" },
+        },
+      },
+      post: {
+        tags: ["Merchant Wallets"],
+        summary: "Add wallet",
+        description: "Add a new wallet address for a specific chain. First wallet for a chain is automatically set as primary.",
+        security: [{ BearerAuth: [] }],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: { $ref: "#/components/schemas/AddMerchantWalletRequest" },
+            },
+          },
+        },
+        responses: {
+          "201": {
+            description: "Wallet added successfully",
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/MerchantWalletResponse" },
+              },
+            },
+          },
+          "400": { $ref: "#/components/responses/BadRequest" },
+          "401": { $ref: "#/components/responses/Unauthorized" },
+        },
+      },
+    },
+    "/merchants/wallets/sync": {
+      post: {
+        tags: ["Merchant Wallets"],
+        summary: "Sync Privy wallet",
+        description: "Sync the authenticated user's Privy embedded wallet to the merchant_wallets table. Called after login to ensure wallet is registered.",
+        security: [{ BearerAuth: [] }],
+        requestBody: {
+          required: false,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: {
+                  chain_id: {
+                    type: "string",
+                    description: "Chain ID for the wallet (defaults to 8453 for Base)",
+                    example: "8453",
+                  },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          "200": {
+            description: "Wallet synced successfully",
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/MerchantWalletSyncResponse" },
+              },
+            },
+          },
+          "400": { $ref: "#/components/responses/BadRequest" },
+          "401": { $ref: "#/components/responses/Unauthorized" },
+        },
+      },
+    },
+    "/merchants/wallets/{walletId}": {
+      get: {
+        tags: ["Merchant Wallets"],
+        summary: "Get wallet by ID",
+        description: "Retrieve a specific wallet by its ID",
+        security: [{ BearerAuth: [] }],
+        parameters: [
+          {
+            name: "walletId",
+            in: "path",
+            required: true,
+            schema: { type: "string", format: "uuid" },
+            description: "Wallet UUID",
+          },
+        ],
+        responses: {
+          "200": {
+            description: "Wallet retrieved successfully",
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/MerchantWalletResponse" },
+              },
+            },
+          },
+          "401": { $ref: "#/components/responses/Unauthorized" },
+          "404": { $ref: "#/components/responses/NotFound" },
+        },
+      },
+      put: {
+        tags: ["Merchant Wallets"],
+        summary: "Update wallet",
+        description: "Update wallet label or primary status",
+        security: [{ BearerAuth: [] }],
+        parameters: [
+          {
+            name: "walletId",
+            in: "path",
+            required: true,
+            schema: { type: "string", format: "uuid" },
+          },
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: { $ref: "#/components/schemas/UpdateMerchantWalletRequest" },
+            },
+          },
+        },
+        responses: {
+          "200": {
+            description: "Wallet updated successfully",
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/MerchantWalletResponse" },
+              },
+            },
+          },
+          "400": { $ref: "#/components/responses/BadRequest" },
+          "401": { $ref: "#/components/responses/Unauthorized" },
+          "404": { $ref: "#/components/responses/NotFound" },
+        },
+      },
+      delete: {
+        tags: ["Merchant Wallets"],
+        summary: "Delete wallet",
+        description: "Remove a wallet from the merchant account. Cannot delete the only wallet for a chain if it's primary.",
+        security: [{ BearerAuth: [] }],
+        parameters: [
+          {
+            name: "walletId",
+            in: "path",
+            required: true,
+            schema: { type: "string", format: "uuid" },
+          },
+        ],
+        responses: {
+          "200": {
+            description: "Wallet deleted successfully",
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/SuccessResponse" },
+              },
+            },
+          },
+          "400": { $ref: "#/components/responses/BadRequest" },
+          "401": { $ref: "#/components/responses/Unauthorized" },
+          "404": { $ref: "#/components/responses/NotFound" },
+        },
+      },
+    },
+    "/merchants/wallets/{walletId}/primary": {
+      put: {
+        tags: ["Merchant Wallets"],
+        summary: "Set wallet as primary",
+        description: "Set a wallet as the primary wallet for its chain. The previous primary wallet for that chain will be demoted.",
+        security: [{ BearerAuth: [] }],
+        parameters: [
+          {
+            name: "walletId",
+            in: "path",
+            required: true,
+            schema: { type: "string", format: "uuid" },
+          },
+        ],
+        responses: {
+          "200": {
+            description: "Wallet set as primary successfully",
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/MerchantWalletPrimaryResponse" },
+              },
+            },
+          },
+          "400": { $ref: "#/components/responses/BadRequest" },
+          "401": { $ref: "#/components/responses/Unauthorized" },
+          "404": { $ref: "#/components/responses/NotFound" },
         },
       },
     },
@@ -754,7 +983,7 @@ X-Pin-Code: <6-digit-pin>
         type: "http",
         scheme: "bearer",
         bearerFormat: "JWT",
-        description: "JWT token from Dynamic or Privy authentication",
+        description: "JWT token from Privy authentication",
       },
     },
     parameters: {
@@ -928,6 +1157,94 @@ X-Pin-Code: <6-digit-pin>
           attempts_remaining: { type: "integer" },
           is_blocked: { type: "boolean" },
           message: { type: "string" },
+        },
+      },
+
+      // Chain schemas
+      Chain: {
+        type: "object",
+        properties: {
+          chain_id: { type: "string", example: "8453", description: "Unique chain identifier" },
+          name: { type: "string", example: "Base" },
+          chain_type: { type: "string", enum: ["evm", "stellar", "solana"], example: "evm" },
+          icon_url: { type: "string", format: "uri", nullable: true },
+          explorer_url: { type: "string", format: "uri", nullable: true },
+          is_active: { type: "boolean" },
+          created_at: { type: "string", format: "date-time" },
+          updated_at: { type: "string", format: "date-time" },
+        },
+      },
+      ChainListResponse: {
+        type: "object",
+        properties: {
+          success: { type: "boolean" },
+          chains: { type: "array", items: { $ref: "#/components/schemas/Chain" } },
+        },
+      },
+
+      // Merchant Wallet schemas
+      MerchantWallet: {
+        type: "object",
+        properties: {
+          wallet_id: { type: "string", format: "uuid" },
+          merchant_id: { type: "string", format: "uuid" },
+          chain_id: { type: "string", example: "8453" },
+          address: { type: "string", example: "0x1234...abcd" },
+          label: { type: "string", nullable: true, example: "Primary Wallet" },
+          source: { type: "string", enum: ["privy", "manual"], example: "privy" },
+          is_primary: { type: "boolean", description: "Whether this is the primary wallet for this chain" },
+          is_verified: { type: "boolean", description: "Whether wallet ownership has been verified" },
+          created_at: { type: "string", format: "date-time" },
+          updated_at: { type: "string", format: "date-time" },
+          chain: { $ref: "#/components/schemas/Chain", description: "Joined chain data" },
+        },
+      },
+      MerchantWalletListResponse: {
+        type: "object",
+        properties: {
+          success: { type: "boolean" },
+          wallets: { type: "array", items: { $ref: "#/components/schemas/MerchantWallet" } },
+        },
+      },
+      MerchantWalletResponse: {
+        type: "object",
+        properties: {
+          success: { type: "boolean" },
+          wallet: { $ref: "#/components/schemas/MerchantWallet" },
+        },
+      },
+      MerchantWalletSyncResponse: {
+        type: "object",
+        properties: {
+          success: { type: "boolean" },
+          wallet: { $ref: "#/components/schemas/MerchantWallet" },
+          message: { type: "string", example: "Privy wallet synced successfully" },
+        },
+      },
+      MerchantWalletPrimaryResponse: {
+        type: "object",
+        properties: {
+          success: { type: "boolean" },
+          wallet: { $ref: "#/components/schemas/MerchantWallet" },
+          message: { type: "string", example: "Wallet set as primary successfully" },
+        },
+      },
+      AddMerchantWalletRequest: {
+        type: "object",
+        required: ["chain_id", "address"],
+        properties: {
+          chain_id: { type: "string", example: "8453", description: "Chain ID for the wallet" },
+          address: { type: "string", example: "0x1234...abcd", description: "Wallet address" },
+          label: { type: "string", example: "My Polygon Wallet", description: "Optional label for the wallet" },
+          source: { type: "string", enum: ["privy", "manual"], default: "manual", description: "Source of the wallet" },
+          is_primary: { type: "boolean", description: "Set as primary for this chain (defaults to true for first wallet)" },
+        },
+      },
+      UpdateMerchantWalletRequest: {
+        type: "object",
+        properties: {
+          label: { type: "string", description: "New label for the wallet" },
+          is_primary: { type: "boolean", description: "Set as primary for this chain" },
         },
       },
 
