@@ -80,9 +80,8 @@ app.get("/", dualAuthMiddleware, merchantResolverMiddleware, async (c) => {
  */
 app.post("/", dualAuthMiddleware, async (c) => {
   const supabase = c.get("supabase") as TypedSupabaseClient;
-  const userProviderId = c.get("dynamicId") as string;
+  const privyId = c.get("privyId") as string;
   const walletAddress = c.get("walletAddress") as string;
-  const isPrivyAuth = c.get("isPrivyAuth") as boolean;
 
   const body = await c.req.json().catch(() => ({}));
 
@@ -99,15 +98,10 @@ app.post("/", dualAuthMiddleware, async (c) => {
     display_name: body.display_name || email,
     default_token_id: DEFAULT_TOKEN_ID,
     wallet_address: walletAddress,
+    privy_id: privyId,
     updated_at: new Date().toISOString(),
   };
 
-  // Set the provider ID based on auth type
-  if (isPrivyAuth) {
-    merchantData.privy_id = userProviderId;
-  } else {
-    merchantData.dynamic_id = userProviderId;
-  }
   if (body.description) {
     merchantData.description = body.description;
   }
@@ -121,42 +115,37 @@ app.post("/", dualAuthMiddleware, async (c) => {
     merchantData.default_language = body.default_language;
   }
 
-  // Check if merchant exists by email or provider
+  // Check if merchant exists by email or Privy ID
   const { data: existingByEmail } = await supabase
     .from("merchants")
-    .select("merchant_id, privy_id, dynamic_id")
+    .select("merchant_id, privy_id")
     .eq("email", email)
     .single();
 
-  const existingByProviderQuery = supabase
+  const { data: existingByPrivyId } = await supabase
     .from("merchants")
-    .select("merchant_id, privy_id, dynamic_id");
-
-  const { data: existingByProvider } = isPrivyAuth
-    ? await existingByProviderQuery.eq("privy_id", userProviderId).single()
-    : await existingByProviderQuery.eq("dynamic_id", userProviderId).single();
+    .select("merchant_id, privy_id")
+    .eq("privy_id", privyId)
+    .single();
 
   let data, error;
 
-  if (existingByEmail && !existingByProvider) {
-    // Update existing merchant with new provider info
+  if (existingByEmail && !existingByPrivyId) {
+    // Update existing merchant with new Privy ID
     ({ data, error } = await supabase
       .from("merchants")
       .update(merchantData)
       .eq("email", email)
       .select()
       .single());
-  } else if (existingByProvider) {
-    // Update existing merchant by provider
-    const updateQuery = supabase
+  } else if (existingByPrivyId) {
+    // Update existing merchant by Privy ID
+    ({ data, error } = await supabase
       .from("merchants")
       .update(merchantData)
+      .eq("privy_id", privyId)
       .select()
-      .single();
-
-    ({ data, error } = isPrivyAuth
-      ? await updateQuery.eq("privy_id", userProviderId)
-      : await updateQuery.eq("dynamic_id", userProviderId));
+      .single());
   } else {
     // Insert new merchant
     ({ data, error } = await supabase

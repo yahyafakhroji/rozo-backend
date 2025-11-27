@@ -159,11 +159,10 @@ export type Database = {
           default_token_id: string
           description: string | null
           display_name: string | null
-          dynamic_id: string | null
           email: string
           logo_url: string | null
           merchant_id: string
-          privy_id: string | null
+          privy_id: string
           updated_at: string
           wallet_address: string
         }
@@ -174,11 +173,10 @@ export type Database = {
           default_token_id: string
           description?: string | null
           display_name?: string | null
-          dynamic_id?: string | null
           email: string
           logo_url?: string | null
           merchant_id?: string
-          privy_id?: string | null
+          privy_id: string
           updated_at?: string
           wallet_address: string
         }
@@ -189,11 +187,10 @@ export type Database = {
           default_token_id?: string
           description?: string | null
           display_name?: string | null
-          dynamic_id?: string | null
           email?: string
           logo_url?: string | null
           merchant_id?: string
-          privy_id?: string | null
+          privy_id?: string
           updated_at?: string
           wallet_address?: string
         }

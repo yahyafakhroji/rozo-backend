@@ -6,10 +6,8 @@ This document covers the technical architecture, project structure, and core fun
 
 - **Database**: PostgreSQL (Supabase)
 - **Compute**: Supabase Edge Functions (Deno Runtime, TypeScript)
-- **Authentication**: Dual provider support
-  - [Dynamic](https://www.dynamic.xyz/) (Wallet-based JWT authentication)
-  - [Privy](https://privy.io/) (Wallet authentication and user management)
-- **Web Framework**: [Hono](https://hono.dev/) (for deposits function)
+- **Authentication**: [Privy](https://privy.io/) (Wallet authentication and user management)
+- **Web Framework**: [Hono](https://hono.dev/) (for all Edge Functions)
 - **Payments**: [Daimo Pay](https://pay.daimo.com/) (Payment processing and webhooks)
 - **Real-time Notifications**: [Pusher](https://pusher.com/) (For instant updates on payment status)
 - **Caching**: In-memory currency rate caching with TTL
@@ -28,28 +26,25 @@ This document covers the technical architecture, project structure, and core fun
 ├── example.env            # Environment variable template
 ├── supabase/
 │   ├── _shared/           # Shared utilities and middleware
-│   │   ├── daimo-pay.ts   # Daimo payment integration
-│   │   ├── currency-cache.ts # Currency rate caching with TTL
-│   │   ├── dual-auth-middleware.ts # Dual auth middleware (Hono)
-│   │   ├── dynamic-middleware.ts # Dynamic auth middleware (legacy)
-│   │   ├── pin-validation.ts # PIN code validation utilities
-│   │   └── utils.ts       # Common utility functions
+│   │   ├── config/        # Constants, CORS configuration
+│   │   ├── middleware/    # Auth, error handling, PIN validation
+│   │   ├── services/      # Business logic services
+│   │   ├── utils/         # Common utility functions
+│   │   ├── types/         # TypeScript interfaces
+│   │   ├── schemas/       # Zod validation schemas
+│   │   └── factories/     # Transaction factory
 │   ├── functions/         # Core application logic as Edge Functions
 │   │   ├── merchants/     # Merchant profiles and settings management
-│   │   │   ├── index.ts   # Main entry point (supports both auth providers)
-│   │   │   ├── utils.ts   # JWT verification for Dynamic & Privy
+│   │   │   ├── index.ts   # Main entry point
 │   │   │   └── deno.json  # Deno configuration
 │   │   ├── orders/        # Order lifecycle management
-│   │   │   ├── index.ts   # Main entry point (dual auth support)
-│   │   │   ├── utils.ts   # Order utilities & JWT verification
+│   │   │   ├── index.ts   # Main entry point
 │   │   │   └── deno.json  # Deno configuration
 │   │   ├── deposits/      # Deposit management (Hono-based)
-│   │   │   ├── index.ts   # Main entry point using Hono framework
-│   │   │   ├── utils.ts   # Deposit creation and validation
+│   │   │   ├── index.ts   # Main entry point
 │   │   │   └── deno.json  # Deno configuration
 │   │   ├── withdrawals/   # Merchant withdrawal processing
-│   │   │   ├── index.ts   # Main entry point (dual auth support)
-│   │   │   ├── utils.ts   # Withdrawal utilities & JWT verification
+│   │   │   ├── index.ts   # Main entry point
 │   │   │   └── deno.json  # Deno configuration
 │   │   ├── payment-callback/  # Payment webhook processing
 │   │   │   ├── index.ts   # Webhook handler (no auth required)
@@ -83,14 +78,14 @@ Core backend logic is handled by these Supabase Edge Functions:
 ### 1. `/merchants`
 
 - **Manages**: Merchant profiles (create, read, update)
-- **Auth**: Dual JWT support (Dynamic or Privy)
+- **Auth**: Privy JWT
 - **Features**: Profile management, logo upload, merchant settings
-- **Database**: Uses OR logic for `dynamic_id` and `privy_id` columns
+- **Database**: Uses `privy_id` column for merchant identification
 
 ### 2. `/orders`
 
 - **Manages**: Order lifecycle (creation, retrieval, status tracking, payment regeneration)
-- **Auth**: Dual JWT support (Dynamic or Privy)
+- **Auth**: Privy JWT
 - **Features**:
   - Order creation with cached currency conversion
   - Preferred token system (user choice vs merchant default)
@@ -110,14 +105,14 @@ Core backend logic is handled by these Supabase Edge Functions:
 
 - **Framework**: Built with Hono for modern routing and middleware
 - **Manages**: Merchant deposit requests and tracking
-- **Auth**: Privy middleware with Dynamic fallback
+- **Auth**: Privy JWT
 - **Features**: Deposit creation, history retrieval, status tracking
 - **Integrates with**: Daimo Pay for payment processing
 
 ### 4. `/withdrawals`
 
 - **Manages**: Merchant withdrawal requests and processing
-- **Auth**: Dual JWT support (Dynamic or Privy)
+- **Auth**: Privy JWT + PIN validation
 - **Features**: Withdrawal creation, history retrieval
 
 ### 5. `/payment-callback`
@@ -149,34 +144,30 @@ Core backend logic is handled by these Supabase Edge Functions:
 
 ## Authentication Architecture
 
-The system supports dual authentication providers:
-
-### Dynamic Authentication
-
-- Wallet-based JWT authentication
-- Uses `dynamic_id` column in merchants table
-- Supports embedded wallet addresses
+The system uses Privy for authentication:
 
 ### Privy Authentication
 
 - Modern wallet authentication and user management
-- Uses `privy_id` column in merchants table
-- Enhanced user experience with better wallet support
+- Uses `privy_id` column in merchants table (required, unique)
+- Embedded wallet support via Privy SDK
+- JWT tokens verified server-side using Privy server SDK
 
 ### Implementation Pattern
 
 All functions (except webhooks) follow this pattern:
 
-1. Try Privy JWT verification first
-2. Fallback to Dynamic JWT verification if Privy fails
-3. Extract `userProviderId` from successful verification
-4. Use OR logic in database queries: `privy_id.eq.${userProviderId},dynamic_id.eq.${userProviderId}`
+1. Extract Bearer token from Authorization header
+2. Verify JWT via Privy SDK
+3. Extract `privyId` and `walletAddress` from verified token
+4. Query merchant by `privy_id`
+5. Execute business logic with authenticated merchant context
 
 ## Database Schema
 
 ### Core Tables
 
-- **merchants**: Merchant profiles with dual authentication support
+- **merchants**: Merchant profiles identified by Privy ID
 - **orders**: Order lifecycle with expiration and payment data
 - **deposits**: Merchant deposit requests
 - **withdrawals**: Merchant withdrawal processing
@@ -200,8 +191,8 @@ All functions (except webhooks) follow this pattern:
 
 ## Security Architecture
 
-- **Dual Authentication**: Multiple auth providers for redundancy
-- **PIN Code System**: Additional security layer for merchants
+- **Privy Authentication**: Secure JWT-based authentication with embedded wallets
+- **PIN Code System**: Additional security layer for sensitive operations (withdrawals, transfers)
 - **Status Management**: Account status enforcement across all functions
 - **Webhook Validation**: Secure payment callback processing
-- **Input Validation**: Comprehensive data validation and sanitization
+- **Input Validation**: Comprehensive data validation using Zod schemas

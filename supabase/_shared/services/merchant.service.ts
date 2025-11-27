@@ -22,26 +22,22 @@ import type {
  */
 export async function validateMerchant(
   supabase: TypedSupabaseClient,
-  userProviderId: string,
-  isPrivyAuth: boolean,
+  privyId: string,
 ): Promise<MerchantValidationResult> {
   try {
-    const merchantQuery = supabase
+    const { data: merchant, error: merchantError } = await supabase
       .from("merchants")
       .select(`
         merchant_id,
-        dynamic_id,
         privy_id,
         wallet_address,
         status,
         default_token_id,
         logo_url,
         stellar_address
-      `);
-
-    const { data: merchant, error: merchantError } = isPrivyAuth
-      ? await merchantQuery.eq("privy_id", userProviderId).single()
-      : await merchantQuery.eq("dynamic_id", userProviderId).single();
+      `)
+      .eq("privy_id", privyId)
+      .single();
 
     if (merchantError || !merchant) {
       return {
@@ -108,17 +104,14 @@ export async function getMerchantById(
  */
 export async function getMerchantWithStatusCheck(
   supabase: TypedSupabaseClient,
-  userProviderId: string,
-  isPrivyAuth: boolean,
+  privyId: string,
   checkBlocked = true,
 ): Promise<{ merchant: MerchantData | null; error?: string; code?: string }> {
-  const merchantQuery = supabase
+  const { data: merchant, error: merchantError } = await supabase
     .from("merchants")
-    .select("merchant_id, status");
-
-  const { data: merchant, error: merchantError } = isPrivyAuth
-    ? await merchantQuery.eq("privy_id", userProviderId).single()
-    : await merchantQuery.eq("dynamic_id", userProviderId).single();
+    .select("merchant_id, status")
+    .eq("privy_id", privyId)
+    .single();
 
   if (merchantError || !merchant) {
     return { merchant: null, error: "Merchant not found" };

@@ -10,28 +10,25 @@ import { extractClientInfo, extractPinFromHeaders } from "../utils/helpers.ts";
 /**
  * PIN validation middleware for Hono
  * Validates PIN code for merchants that have PIN enabled
- * Must be used after dualAuthMiddleware
+ * Must be used after privyAuthMiddleware
  */
 export const pinValidationMiddleware: MiddlewareHandler = async (
   c: Context,
   next: Next,
 ) => {
   const supabase = c.get("supabase");
-  const userProviderId = c.get("dynamicId");
-  const isPrivyAuth = c.get("isPrivyAuth");
+  const privyId = c.get("privyId");
 
-  if (!supabase || !userProviderId) {
+  if (!supabase || !privyId) {
     return c.json({ error: "Authentication required" }, 401);
   }
 
   // Get merchant data including PIN hash
-  const merchantQuery = supabase
+  const { data: merchant, error: merchantError } = await supabase
     .from("merchants")
-    .select("merchant_id, status, pin_code_hash");
-
-  const { data: merchant, error: merchantError } = isPrivyAuth
-    ? await merchantQuery.eq("privy_id", userProviderId).single()
-    : await merchantQuery.eq("dynamic_id", userProviderId).single();
+    .select("merchant_id, status, pin_code_hash")
+    .eq("privy_id", privyId)
+    .single();
 
   if (merchantError || !merchant) {
     return c.json({ error: "Merchant not found" }, 404);
@@ -97,21 +94,18 @@ export const optionalPinMiddleware: MiddlewareHandler = async (
   next: Next,
 ) => {
   const supabase = c.get("supabase");
-  const userProviderId = c.get("dynamicId");
-  const isPrivyAuth = c.get("isPrivyAuth");
+  const privyId = c.get("privyId");
 
-  if (!supabase || !userProviderId) {
+  if (!supabase || !privyId) {
     return c.json({ error: "Authentication required" }, 401);
   }
 
   // Get merchant data
-  const merchantQuery = supabase
+  const { data: merchant, error: merchantError } = await supabase
     .from("merchants")
-    .select("merchant_id, status, pin_code_hash");
-
-  const { data: merchant, error: merchantError } = isPrivyAuth
-    ? await merchantQuery.eq("privy_id", userProviderId).single()
-    : await merchantQuery.eq("dynamic_id", userProviderId).single();
+    .select("merchant_id, status, pin_code_hash")
+    .eq("privy_id", privyId)
+    .single();
 
   if (merchantError || !merchant) {
     return c.json({ error: "Merchant not found" }, 404);

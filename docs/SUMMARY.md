@@ -1,6 +1,6 @@
 # Rozo Backend - Project Summary
 
-A high-performance payment processing platform built with Supabase Edge Functions, supporting dual authentication and multi-chain crypto transactions.
+A high-performance payment processing platform built with Supabase Edge Functions, supporting Privy authentication and multi-chain crypto transactions.
 
 ## Quick Reference
 
@@ -9,7 +9,7 @@ A high-performance payment processing platform built with Supabase Edge Function
 | **Runtime**       | Deno (Supabase Edge Functions) |
 | **Framework**     | Hono                           |
 | **Database**      | PostgreSQL 17 (Supabase)       |
-| **Auth**          | Dynamic + Privy (dual JWT)     |
+| **Auth**          | Privy (JWT)                    |
 | **Payments**      | Daimo Pay                      |
 | **Blockchain**    | EVM (Base) + Stellar           |
 | **Notifications** | Pusher + FCM                   |
@@ -56,11 +56,11 @@ supabase/
 
 ## Core Concepts
 
-### Authentication (Dual Provider)
+### Authentication (Privy)
 
-- **Privy**: Primary auth with wallet management
-- **Dynamic**: Fallback wallet-based auth
-- All functions try Privy first, then Dynamic
+- **Privy**: Primary authentication with embedded wallet management
+- JWT tokens verified via Privy SDK
+- Each merchant identified by unique `privy_id`
 
 ### Merchant Status
 
@@ -132,8 +132,7 @@ GET    /reports/summary?from=YYYY-MM-DD&to=YYYY-MM-DD&group_by=day
 ROZO_SUPABASE_URL
 ROZO_SUPABASE_SERVICE_ROLE_KEY
 
-# Auth
-DYNAMIC_ENV_ID
+# Auth (Privy)
 PRIVY_APP_ID
 PRIVY_APP_SECRET
 

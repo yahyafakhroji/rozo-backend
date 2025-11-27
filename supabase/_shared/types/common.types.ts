@@ -15,8 +15,7 @@ export type TypedSupabaseClient = SupabaseClient<Database>;
 
 export interface MerchantData {
   merchant_id: string;
-  dynamic_id?: string;
-  privy_id?: string;
+  privy_id: string;
   email?: string;
   display_name?: string;
   description?: string;

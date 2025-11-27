@@ -67,57 +67,41 @@ if (merchant.status === 'INACTIVE') {
 
 ## Authentication Architecture
 
-### Dual Provider Support
+### Privy Authentication
 
-The system supports two authentication providers:
-
-#### Dynamic Authentication
-
-- **Provider**: [Dynamic](https://www.dynamic.xyz/)
-- **Type**: Wallet-based JWT authentication
-- **Database Field**: `dynamic_id` (UUID)
-- **Features**:
-  - Embedded wallet addresses
-  - Wallet-based user identification
-  - JWT token verification
-
-#### Privy Authentication
+The system uses Privy for authentication:
 
 - **Provider**: [Privy](https://privy.io/)
 - **Type**: Modern wallet authentication and user management
-- **Database Field**: `privy_id` (Text/DID)
+- **Database Field**: `privy_id` (required, unique)
 - **Features**:
-  - Enhanced user experience
-  - Better wallet support
+  - Embedded wallet management
+  - Secure JWT token verification
   - Modern authentication flow
 
 ### Authentication Flow
 
 ```typescript
-// Dual authentication pattern
+// Privy authentication pattern
 const privy = await verifyPrivyJWT(token, PRIVY_APP_ID, PRIVY_APP_SECRET);
-const dynamic = await verifyDynamicJWT(token, DYNAMIC_ENV_ID);
 
-let userProviderId = null;
-let isPrivyAuth = false;
-
-if (dynamic.success) {
-  userProviderId = dynamic.payload.sub;
+if (!privy.success) {
+  return { error: 'Invalid or expired token' };
 }
 
-if (privy.success) {
-  userProviderId = privy.payload?.id;
-  isPrivyAuth = true;
-}
+const privyId = privy.payload?.id;
+const walletAddress = privy.embedded_wallet_address;
 ```
 
 ### Database Query Pattern
 
 ```typescript
-// Use appropriate column based on auth provider
-const { data: merchant } = isPrivyAuth
-  ? await merchantQuery.eq("privy_id", userProviderId).single()
-  : await merchantQuery.eq("dynamic_id", userProviderId).single();
+// Query merchant by Privy ID
+const { data: merchant } = await supabase
+  .from("merchants")
+  .select("*")
+  .eq("privy_id", privyId)
+  .single();
 ```
 
 ## Security Features
@@ -131,9 +115,8 @@ const { data: merchant } = isPrivyAuth
 
 ### Authentication Security
 
-- **Dual Provider**: Redundancy through multiple auth providers
-- **JWT Verification**: Secure token validation
-- **Wallet Integration**: Blockchain-based authentication
+- **Privy JWT**: Secure token verification via Privy SDK
+- **Wallet Integration**: Blockchain-based authentication with embedded wallets
 - **Session Management**: Proper token handling and validation
 
 ### Data Protection
@@ -192,23 +175,20 @@ async function validatePIN(
 ### Authentication Middleware
 
 ```typescript
-async function dualAuthMiddleware(c: Context, next: Next) {
+async function privyAuthMiddleware(c: Context, next: Next) {
   const token = extractBearerToken(c.req.header('Authorization'));
-  
-  // Try Privy first
+
+  // Verify with Privy
   const privy = await verifyPrivyJWT(token, PRIVY_APP_ID, PRIVY_APP_SECRET);
-  
-  // Fallback to Dynamic
-  const dynamic = await verifyDynamicJWT(token, DYNAMIC_ENV_ID);
-  
-  if (!privy.success && !dynamic.success) {
-    return c.json({ error: 'Invalid token' }, 401);
+
+  if (!privy.success) {
+    return c.json({ error: 'Invalid or expired token' }, 401);
   }
 
   // Set context variables
-  c.set('userProviderId', privy.success ? privy.payload?.id : dynamic.payload.sub);
-  c.set('isPrivyAuth', privy.success);
-  
+  c.set('privyId', privy.payload?.id);
+  c.set('walletAddress', privy.embedded_wallet_address);
+
   await next();
 }
 ```
@@ -235,7 +215,7 @@ async function dualAuthMiddleware(c: Context, next: Next) {
 
 1. **Always Check Status**: Validate merchant status before any operation
 2. **Secure PIN Handling**: Never log or store PIN codes in plain text
-3. **Dual Auth Support**: Implement both authentication providers
+3. **Privy Auth**: Use Privy middleware for all authenticated endpoints
 4. **Error Handling**: Provide clear error messages for security events
 5. **Audit Logging**: Log all security-related activities
 
@@ -244,5 +224,5 @@ async function dualAuthMiddleware(c: Context, next: Next) {
 1. **Regular Audits**: Monitor PIN attempt patterns
 2. **Status Monitoring**: Track account status changes
 3. **Access Control**: Implement proper role-based access
-4. **Input Validation**: Validate all user inputs
+4. **Input Validation**: Validate all user inputs using Zod schemas
 5. **Secure Storage**: Use proper encryption for sensitive data

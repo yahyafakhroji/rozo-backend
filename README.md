@@ -1,6 +1,6 @@
 # Rozo Backend API
 
-A high-performance payment processing backend built with Supabase Edge Functions, supporting dual authentication providers and automated order management.
+A high-performance payment processing backend built with Supabase Edge Functions, supporting Privy wallet authentication and automated order management.
 
 ## 🚀 Quick Start
 
@@ -27,7 +27,7 @@ npx supabase functions serve --env-file .env.local
 
 ## 🏗️ Core Features
 
-- **Dual Authentication**: Dynamic + Privy wallet authentication
+- **Privy Authentication**: Secure wallet-based authentication via Privy
 - **Payment Processing**: Daimo Pay integration with webhooks
 - **Order Management**: Automatic expiration and status tracking
 - **Currency Conversion**: High-performance caching system
@@ -38,10 +38,10 @@ npx supabase functions serve --env-file .env.local
 
 - **Database**: PostgreSQL (Supabase)
 - **Compute**: Supabase Edge Functions (Deno + TypeScript)
-- **Authentication**: Dynamic + Privy
+- **Authentication**: Privy
 - **Payments**: Daimo Pay
 - **Notifications**: Pusher
-- **Framework**: Hono (for deposits)
+- **Framework**: Hono
 
 ## 📁 Project Structure
 
@@ -61,7 +61,7 @@ See [Deployment Guide](docs/deployment.md) for complete environment setup.
 Required variables:
 
 - `ROZO_SUPABASE_URL` & `ROZO_SUPABASE_SERVICE_ROLE_KEY`
-- `DYNAMIC_ENV_ID` & `PRIVY_APP_ID` & `PRIVY_APP_SECRET`
+- `PRIVY_APP_ID` & `PRIVY_APP_SECRET`
 - `DAIMO_*` variables for payment processing
 - `PUSHER_*` variables for notifications
 
