@@ -15,8 +15,8 @@ export function createSupabaseClient(
   url?: string,
   key?: string,
 ): TypedSupabaseClient {
-  const supabaseUrl = url || Deno.env.get("SUPABASE_URL")!;
-  const supabaseKey = key || Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+  const supabaseUrl = url || Deno.env.get("ROZO_SUPABASE_URL")!;
+  const supabaseKey = key || Deno.env.get("ROZO_SUPABASE_SERVICE_ROLE_KEY")!;
 
   return createClient<Database>(supabaseUrl, supabaseKey, {
     auth: {
@@ -40,8 +40,8 @@ export function getAuthEnvVars(): {
   const dynamicEnvId = Deno.env.get("DYNAMIC_ENV_ID") || "";
   const privyAppId = Deno.env.get("PRIVY_APP_ID") || "";
   const privyAppSecret = Deno.env.get("PRIVY_APP_SECRET") || "";
-  const supabaseUrl = Deno.env.get("SUPABASE_URL") || "";
-  const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
+  const supabaseUrl = Deno.env.get("ROZO_SUPABASE_URL") || "";
+  const supabaseKey = Deno.env.get("ROZO_SUPABASE_SERVICE_ROLE_KEY") || "";
 
   const valid = !!(
     dynamicEnvId &&

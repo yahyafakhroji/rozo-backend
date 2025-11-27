@@ -175,8 +175,8 @@ app.get("/", handleGetAll);
 
 ```bash
 # Supabase
-SUPABASE_URL=
-SUPABASE_SERVICE_ROLE_KEY=
+ROZO_SUPABASE_URL=
+ROZO_SUPABASE_SERVICE_ROLE_KEY=
 
 # Authentication
 DYNAMIC_ENV_ID=

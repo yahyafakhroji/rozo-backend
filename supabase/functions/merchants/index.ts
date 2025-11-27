@@ -80,15 +80,14 @@ app.get("/", dualAuthMiddleware, merchantResolverMiddleware, async (c) => {
  */
 app.post("/", dualAuthMiddleware, async (c) => {
   const supabase = c.get("supabase") as TypedSupabaseClient;
-  const dynamicPayload = c.get("dynamicPayload");
-  const privyPayload = c.get("privyPayload");
-  const walletAddress = c.get("walletAddress");
-  const isPrivyAuth = c.get("isPrivyAuth");
+  const userProviderId = c.get("dynamicId") as string;
+  const walletAddress = c.get("walletAddress") as string;
+  const isPrivyAuth = c.get("isPrivyAuth") as boolean;
 
   const body = await c.req.json().catch(() => ({}));
 
-  // Get email from token or request body
-  const email = body.email ?? dynamicPayload?.email ?? privyPayload?.email?.address;
+  // Email is required from request body
+  const email = body.email;
 
   if (!email) {
     return c.json({ success: false, error: "Email is required" }, 400);
@@ -103,11 +102,11 @@ app.post("/", dualAuthMiddleware, async (c) => {
     updated_at: new Date().toISOString(),
   };
 
-  if (dynamicPayload?.sub) {
-    merchantData.dynamic_id = dynamicPayload.sub;
-  }
-  if (privyPayload?.id) {
-    merchantData.privy_id = privyPayload.id;
+  // Set the provider ID based on auth type
+  if (isPrivyAuth) {
+    merchantData.privy_id = userProviderId;
+  } else {
+    merchantData.dynamic_id = userProviderId;
   }
   if (body.description) {
     merchantData.description = body.description;
@@ -123,8 +122,6 @@ app.post("/", dualAuthMiddleware, async (c) => {
   }
 
   // Check if merchant exists by email or provider
-  const userProviderId = merchantData.dynamic_id || merchantData.privy_id;
-
   const { data: existingByEmail } = await supabase
     .from("merchants")
     .select("merchant_id, privy_id, dynamic_id")
@@ -136,8 +133,8 @@ app.post("/", dualAuthMiddleware, async (c) => {
     .select("merchant_id, privy_id, dynamic_id");
 
   const { data: existingByProvider } = isPrivyAuth
-    ? await existingByProviderQuery.eq("privy_id", userProviderId as string).single()
-    : await existingByProviderQuery.eq("dynamic_id", userProviderId as string).single();
+    ? await existingByProviderQuery.eq("privy_id", userProviderId).single()
+    : await existingByProviderQuery.eq("dynamic_id", userProviderId).single();
 
   let data, error;
 
@@ -158,8 +155,8 @@ app.post("/", dualAuthMiddleware, async (c) => {
       .single();
 
     ({ data, error } = isPrivyAuth
-      ? await updateQuery.eq("privy_id", userProviderId as string)
-      : await updateQuery.eq("dynamic_id", userProviderId as string));
+      ? await updateQuery.eq("privy_id", userProviderId)
+      : await updateQuery.eq("dynamic_id", userProviderId));
   } else {
     // Insert new merchant
     ({ data, error } = await supabase

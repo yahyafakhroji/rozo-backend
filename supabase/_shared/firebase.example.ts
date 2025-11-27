@@ -11,8 +11,8 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 // Example 1: Send notification when a new order is created
 async function notifyNewOrder(merchantId: string, orderId: string, orderNumber: string) {
   const supabase = createClient(
-    Deno.env.get('SUPABASE_URL')!,
-    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
+    Deno.env.get('ROZO_SUPABASE_URL')!,
+    Deno.env.get('ROZO_SUPABASE_SERVICE_ROLE_KEY')!
   )
 
   // Get all devices for this merchant
@@ -75,8 +75,8 @@ async function notifyPaymentReceived(
   currency: string
 ) {
   const supabase = createClient(
-    Deno.env.get('SUPABASE_URL')!,
-    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
+    Deno.env.get('ROZO_SUPABASE_URL')!,
+    Deno.env.get('ROZO_SUPABASE_SERVICE_ROLE_KEY')!
   )
 
   const { data: devices } = await supabase
@@ -105,8 +105,8 @@ async function notifyPaymentReceived(
 // Example 4: Send order completed notification
 async function notifyOrderCompleted(merchantId: string, orderId: string, orderNumber: string) {
   const supabase = createClient(
-    Deno.env.get('SUPABASE_URL')!,
-    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
+    Deno.env.get('ROZO_SUPABASE_URL')!,
+    Deno.env.get('ROZO_SUPABASE_SERVICE_ROLE_KEY')!
   )
 
   const { data: devices } = await supabase
@@ -144,8 +144,8 @@ serve(async (req) => {
   const { merchant_id, order_id, order_number } = await req.json()
 
   const supabase = createClient(
-    Deno.env.get('SUPABASE_URL')!,
-    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
+    Deno.env.get('ROZO_SUPABASE_URL')!,
+    Deno.env.get('ROZO_SUPABASE_SERVICE_ROLE_KEY')!
   )
 
   // Get merchant devices

@@ -9,14 +9,13 @@ import { cors } from "jsr:@hono/hono/cors";
 // OpenAPI specification
 import { openApiSpec } from "./openapi.ts";
 
+// Config
+import { corsConfig } from "../../_shared/config/index.ts";
+
 const app = new Hono().basePath("/api-docs");
 
 // Apply CORS for all origins
-app.use("*", cors({
-  origin: "*",
-  allowHeaders: ["Content-Type"],
-  allowMethods: ["GET", "OPTIONS"],
-}));
+app.use("*", cors(corsConfig));
 
 // ============================================================================
 // Swagger UI HTML Template
@@ -89,8 +88,9 @@ const swaggerUIHtml = (specUrl: string) => `
  * GET /api-docs - Swagger UI
  */
 app.get("/", (c) => {
-  const baseUrl = new URL(c.req.url);
-  const specUrl = `${baseUrl.protocol}//${baseUrl.host}/api-docs/openapi.json`;
+  const specUrl = `${
+    Deno.env.get("ROZO_SUPABASE_URL")
+  }/functions/v1/api-docs/openapi.json`;
 
   return c.html(swaggerUIHtml(specUrl));
 });

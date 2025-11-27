@@ -44,8 +44,8 @@ Configure the following variables in `.env.local`:
 #### Supabase Configuration
 
 ```bash
-SUPABASE_URL=your_supabase_project_url
-SUPABASE_SERVICE_ROLE_KEY=your_supabase_service_role_key
+ROZO_SUPABASE_URL=your_supabase_project_url
+ROZO_SUPABASE_SERVICE_ROLE_KEY=your_supabase_service_role_key
 ```
 
 #### Authentication Providers
@@ -157,8 +157,8 @@ In your Supabase project dashboard, go to Settings > Edge Functions and set:
 
 ```bash
 # Supabase (automatically available)
-SUPABASE_URL=your_production_supabase_url
-SUPABASE_SERVICE_ROLE_KEY=your_production_service_role_key
+ROZO_SUPABASE_URL=your_production_supabase_url
+ROZO_SUPABASE_SERVICE_ROLE_KEY=your_production_service_role_key
 
 # Authentication
 DYNAMIC_ENV_ID=your_production_dynamic_env_id
@@ -340,7 +340,7 @@ npx supabase functions logs orders | grep "Missing environment variables"
 npx supabase status
 ```
 
-**Solution**: Verify `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`
+**Solution**: Verify `ROZO_SUPABASE_URL` and `ROZO_SUPABASE_SERVICE_ROLE_KEY`
 
 #### 3. Function Deployment Failures
 

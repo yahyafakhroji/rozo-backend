@@ -31,7 +31,7 @@ function getOptionalEnv(key: string): string | undefined {
 
 /**
  * Get the payment callback URL
- * Constructs from SUPABASE_URL or uses explicit PAYMENT_CALLBACK_URL
+ * Constructs from ROZO_SUPABASE_URL or uses explicit PAYMENT_CALLBACK_URL
  */
 export function getPaymentCallbackUrl(): string {
   const explicitUrl = getOptionalEnv("PAYMENT_CALLBACK_URL");
@@ -39,7 +39,7 @@ export function getPaymentCallbackUrl(): string {
     return explicitUrl;
   }
 
-  const supabaseUrl = getOptionalEnv("SUPABASE_URL");
+  const supabaseUrl = getOptionalEnv("ROZO_SUPABASE_URL");
   if (supabaseUrl) {
     // Extract project ref from URL: https://<project-ref>.supabase.co
     const match = supabaseUrl.match(/https:\/\/([^.]+)\.supabase\.co/);
@@ -189,11 +189,12 @@ export const STATUS_HIERARCHY: Record<PaymentStatus, number> = {
 
 // Valid status values for filtering
 export const VALID_ORDER_STATUSES = [
-  "pending",
-  "completed",
-  "failed",
-  "expired",
-  "discrepancy",
+  "PENDING",
+  "PROCESSING",
+  "COMPLETED",
+  "FAILED",
+  "EXPIRED",
+  "DISCREPANCY",
 ] as const;
 
 export type ValidOrderStatus = (typeof VALID_ORDER_STATUSES)[number];

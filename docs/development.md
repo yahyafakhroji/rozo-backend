@@ -73,7 +73,7 @@ const { data: merchant, error: merchantError } = isPrivyAuth
 return {
   success: false,
   error: "Error message",
-  code: "ERROR_CODE" // Optional
+  code: "ERROR_CODE", // Optional
 };
 
 // HTTP response with CORS headers
@@ -245,7 +245,7 @@ ALTER TABLE "public"."orders"
 -- Backfill expired_at for existing PENDING orders to created_at + 5 minutes
 UPDATE "public"."orders"
 SET "expired_at" = ("created_at" + interval '5 minutes')
-WHERE "expired_at" IS NULL 
+WHERE "expired_at" IS NULL
   AND "status" = 'PENDING';
 
 -- Indexes to improve queries by expiration and status
@@ -265,7 +265,8 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Headers":
+    "authorization, x-client-info, apikey, content-type",
   "Access-Control-Allow-Methods": "POST, GET, PUT, OPTIONS",
 };
 
@@ -277,8 +278,10 @@ serve(async (req) => {
 
   try {
     // Environment variables
-    const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
-    const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+    const ROZO_SUPABASE_URL = Deno.env.get("ROZO_SUPABASE_URL")!;
+    const ROZO_SUPABASE_SERVICE_ROLE_KEY = Deno.env.get(
+      "ROZO_SUPABASE_SERVICE_ROLE_KEY"
+    )!;
 
     // Authentication logic
     const authHeader = req.headers.get("Authorization");
@@ -314,7 +317,10 @@ serve(async (req) => {
       isPrivyAuth = true;
     }
 
-    const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+    const supabase = createClient(
+      ROZO_SUPABASE_URL,
+      ROZO_SUPABASE_SERVICE_ROLE_KEY
+    );
 
     // Route handling
     const url = new URL(req.url);
@@ -322,7 +328,12 @@ serve(async (req) => {
 
     // Route: POST / - Main endpoint
     if (req.method === "POST") {
-      return await handleMainEndpoint(req, supabase, userProviderId, isPrivyAuth);
+      return await handleMainEndpoint(
+        req,
+        supabase,
+        userProviderId,
+        isPrivyAuth
+      );
     }
 
     // Route not found
@@ -390,15 +401,15 @@ const startTime = Date.now();
 
 try {
   // ... function logic
-  
+
   const processingTime = Date.now() - startTime;
   console.log(`Operation completed in ${processingTime}ms`);
-  
+
   return { success: true, ...result };
 } catch (error) {
   const processingTime = Date.now() - startTime;
   console.error(`Operation failed after ${processingTime}ms:`, error);
-  
+
   return { success: false, error: error.message };
 }
 ```
@@ -409,7 +420,7 @@ try {
 // Use parallel operations where possible
 const [merchantResult, conversionResult] = await Promise.all([
   validateMerchant(supabase, userProviderId, isPrivyAuth),
-  convertCurrencyToUSD(supabase, currency, amount)
+  convertCurrencyToUSD(supabase, currency, amount),
 ]);
 
 // Use efficient queries with proper indexes
@@ -439,7 +450,10 @@ for (const field of requiredFields) {
 }
 
 // Validate numeric fields
-if (typeof orderData.display_amount !== "number" || orderData.display_amount <= 0) {
+if (
+  typeof orderData.display_amount !== "number" ||
+  orderData.display_amount <= 0
+) {
   return Response.json(
     { success: false, error: "display_amount must be a positive number" },
     { status: 400, headers: corsHeaders }
@@ -451,19 +465,19 @@ if (typeof orderData.display_amount !== "number" || orderData.display_amount <= 
 
 ```typescript
 // Always check merchant status
-if (merchant.status === 'PIN_BLOCKED') {
+if (merchant.status === "PIN_BLOCKED") {
   return {
     success: false,
-    error: 'Account blocked due to PIN security violations',
-    code: 'PIN_BLOCKED'
+    error: "Account blocked due to PIN security violations",
+    code: "PIN_BLOCKED",
   };
 }
 
-if (merchant.status === 'INACTIVE') {
+if (merchant.status === "INACTIVE") {
   return {
     success: false,
-    error: 'Account is inactive',
-    code: 'INACTIVE'
+    error: "Account is inactive",
+    code: "INACTIVE",
   };
 }
 ```
@@ -474,8 +488,8 @@ if (merchant.status === 'INACTIVE') {
 
 ```bash
 # Required environment variables
-SUPABASE_URL=your_supabase_url
-SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
+ROZO_SUPABASE_URL=your_supabase_url
+ROZO_SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
 DYNAMIC_ENV_ID=your_dynamic_env_id
 PRIVY_APP_ID=your_privy_app_id
 PRIVY_APP_SECRET=your_privy_app_secret
@@ -529,8 +543,8 @@ console.log("Debug info:", { userProviderId, isPrivyAuth, merchantId });
 
 // Check environment variables
 console.log("Environment check:", {
-  hasSupabaseUrl: !!Deno.env.get("SUPABASE_URL"),
-  hasServiceKey: !!Deno.env.get("SUPABASE_SERVICE_ROLE_KEY"),
+  hasSupabaseUrl: !!Deno.env.get("ROZO_SUPABASE_URL"),
+  hasServiceKey: !!Deno.env.get("ROZO_SUPABASE_SERVICE_ROLE_KEY"),
   hasDynamicId: !!Deno.env.get("DYNAMIC_ENV_ID"),
   hasPrivyId: !!Deno.env.get("PRIVY_APP_ID"),
 });
@@ -548,7 +562,7 @@ catch (error) {
     userProviderId,
     isPrivyAuth,
   });
-  
+
   return {
     success: false,
     error: error instanceof Error ? error.message : "Unknown error",

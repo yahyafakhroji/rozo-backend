@@ -26,8 +26,8 @@ function getAuthEnvVars(): AuthEnvVars | null {
   const dynamicEnvId = Deno.env.get("DYNAMIC_ENV_ID");
   const privyAppId = Deno.env.get("PRIVY_APP_ID");
   const privyAppSecret = Deno.env.get("PRIVY_APP_SECRET");
-  const supabaseUrl = Deno.env.get("SUPABASE_URL");
-  const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+  const supabaseUrl = Deno.env.get("ROZO_SUPABASE_URL");
+  const supabaseKey = Deno.env.get("ROZO_SUPABASE_SERVICE_ROLE_KEY");
 
   if (!dynamicEnvId || !privyAppId || !privyAppSecret || !supabaseUrl || !supabaseKey) {
     return null;

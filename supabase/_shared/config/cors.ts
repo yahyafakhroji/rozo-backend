@@ -40,5 +40,5 @@ export const corsConfig = {
     "content-type",
     "x-pin-code",
   ],
-  allowMethods: ["POST", "GET", "PUT", "DELETE", "OPTIONS"],
-} as const;
+  allowMethods: ["POST", "GET", "PUT", "DELETE", "OPTIONS"] as string[],
+};

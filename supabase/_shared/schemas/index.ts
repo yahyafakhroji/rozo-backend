@@ -66,16 +66,18 @@ export const StellarAddressSchema = z.string()
 export const UUIDSchema = z.string().uuid();
 
 /**
- * Order status filter schema
+ * Order status filter schema (case-insensitive, outputs uppercase)
  */
-export const OrderStatusSchema = z.enum([
-  "pending",
-  "processing",
-  "completed",
-  "failed",
-  "expired",
-  "discrepancy",
-]).transform((val) => val.toUpperCase());
+export const OrderStatusSchema = z.string()
+  .transform((val) => val.toUpperCase())
+  .pipe(z.enum([
+    "PENDING",
+    "PROCESSING",
+    "COMPLETED",
+    "FAILED",
+    "EXPIRED",
+    "DISCREPANCY",
+  ]));
 
 /**
  * Group by schema for reports
