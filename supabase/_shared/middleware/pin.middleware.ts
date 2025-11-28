@@ -1,43 +1,56 @@
 /**
  * PIN Validation Middleware
  * PIN code validation middleware for sensitive operations
+ *
+ * IMPORTANT: Must be used AFTER merchantResolverMiddleware
+ * Uses the already-resolved merchant from context to avoid duplicate queries
  */
 
 import { Context, Next, MiddlewareHandler } from "jsr:@hono/hono";
 import { requirePinValidation } from "../services/merchant.service.ts";
 import { extractClientInfo, extractPinFromHeaders } from "../utils/helpers.ts";
+import type { ResolvedMerchant } from "./merchantResolver.middleware.ts";
+import type { TypedSupabaseClient } from "../types/common.types.ts";
 
 /**
  * PIN validation middleware for Hono
  * Validates PIN code for merchants that have PIN enabled
- * Must be used after privyAuthMiddleware
+ *
+ * Prerequisites:
+ * - Must be used after privyAuthMiddleware
+ * - Must be used after merchantResolverMiddleware
+ *
+ * Usage:
+ * ```typescript
+ * app.use("*", privyAuthMiddleware);
+ * app.use("*", merchantResolverMiddleware);
+ * app.post("/sensitive-action", pinValidationMiddleware, handler);
+ * ```
  */
 export const pinValidationMiddleware: MiddlewareHandler = async (
   c: Context,
   next: Next,
 ) => {
-  const supabase = c.get("supabase");
-  const privyId = c.get("privyId");
+  const supabase = c.get("supabase") as TypedSupabaseClient;
+  const merchant = c.get("merchant") as ResolvedMerchant | undefined;
 
-  if (!supabase || !privyId) {
-    return c.json({ error: "Authentication required" }, 401);
+  if (!supabase) {
+    return c.json({ success: false, error: "Authentication required" }, 401);
   }
 
-  // Get merchant data including PIN hash
-  const { data: merchant, error: merchantError } = await supabase
-    .from("merchants")
-    .select("merchant_id, status, pin_code_hash")
-    .eq("privy_id", privyId)
-    .single();
-
-  if (merchantError || !merchant) {
-    return c.json({ error: "Merchant not found" }, 404);
+  if (!merchant) {
+    return c.json(
+      {
+        success: false,
+        error: "Merchant not resolved. Ensure merchantResolverMiddleware is applied before pinValidationMiddleware.",
+      },
+      500,
+    );
   }
 
   // Check if merchant has PIN set
-  if (!merchant.pin_code_hash) {
+  if (!merchant.has_pin) {
     // No PIN required, proceed
-    c.set("merchantId", merchant.merchant_id);
     await next();
     return;
   }
@@ -80,41 +93,43 @@ export const pinValidationMiddleware: MiddlewareHandler = async (
     );
   }
 
-  // PIN validated, set merchant ID and proceed
-  c.set("merchantId", merchant.merchant_id);
+  // PIN validated, proceed
   await next();
 };
 
 /**
  * Optional PIN validation middleware
- * Only validates PIN if merchant has one set, doesn't block if no PIN
+ * Validates PIN if provided, but doesn't require it
+ *
+ * Use case: Operations where PIN adds extra security but isn't mandatory
+ *
+ * Prerequisites:
+ * - Must be used after privyAuthMiddleware
+ * - Must be used after merchantResolverMiddleware
  */
 export const optionalPinMiddleware: MiddlewareHandler = async (
   c: Context,
   next: Next,
 ) => {
-  const supabase = c.get("supabase");
-  const privyId = c.get("privyId");
+  const supabase = c.get("supabase") as TypedSupabaseClient;
+  const merchant = c.get("merchant") as ResolvedMerchant | undefined;
 
-  if (!supabase || !privyId) {
-    return c.json({ error: "Authentication required" }, 401);
+  if (!supabase) {
+    return c.json({ success: false, error: "Authentication required" }, 401);
   }
 
-  // Get merchant data
-  const { data: merchant, error: merchantError } = await supabase
-    .from("merchants")
-    .select("merchant_id, status, pin_code_hash")
-    .eq("privy_id", privyId)
-    .single();
-
-  if (merchantError || !merchant) {
-    return c.json({ error: "Merchant not found" }, 404);
+  if (!merchant) {
+    return c.json(
+      {
+        success: false,
+        error: "Merchant not resolved. Ensure merchantResolverMiddleware is applied before optionalPinMiddleware.",
+      },
+      500,
+    );
   }
-
-  c.set("merchantId", merchant.merchant_id);
 
   // If no PIN is set, just proceed
-  if (!merchant.pin_code_hash) {
+  if (!merchant.has_pin) {
     await next();
     return;
   }

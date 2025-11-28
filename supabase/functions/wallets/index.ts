@@ -19,10 +19,8 @@ import {
   errorMiddleware,
   merchantResolverMiddleware,
   getMerchantFromContext,
+  pinValidationMiddleware,
 } from "../../_shared/middleware/index.ts";
-
-// Services
-import { requirePinValidation } from "../../_shared/services/merchant.service.ts";
 import {
   logWalletTransfer,
   AuditAction,
@@ -36,7 +34,6 @@ import {
 } from "../../_shared/schemas/index.ts";
 
 // Utils
-import { extractPinFromHeaders, extractClientInfo } from "../../_shared/utils/helpers.ts";
 import { extractBearerToken } from "../../_shared/utils/jwt.utils.ts";
 import { rateLimitByMerchant, RATE_LIMITS } from "../../_shared/utils/rateLimit.utils.ts";
 import { submitSignedPaymentTx } from "./transfer.ts";
@@ -328,65 +325,14 @@ async function sendTransaction(
 }
 
 // ============================================================================
-// PIN Validation Helper
-// ============================================================================
-
-async function validatePinIfRequired(
-  c: Context,
-  supabase: TypedSupabaseClient,
-  merchantId: string,
-  hasPinHash: boolean,
-): Promise<{ success: boolean; error?: string; statusCode?: number }> {
-  if (!hasPinHash) {
-    return { success: true };
-  }
-
-  const pinCode = extractPinFromHeaders(c.req.raw);
-
-  if (!pinCode) {
-    debugError("PIN code required for transaction", { merchantId });
-    return {
-      success: false,
-      error: "PIN code is required for wallet transaction operations",
-      statusCode: 400,
-    };
-  }
-
-  const { ipAddress, userAgent } = extractClientInfo(c.req.raw);
-
-  const pinValidation = await requirePinValidation({
-    supabase,
-    merchantId,
-    pinCode,
-    ipAddress,
-    userAgent,
-  });
-
-  if (!pinValidation.success) {
-    debugError("PIN validation failed", {
-      merchantId,
-      error: pinValidation.error,
-      attemptsRemaining: pinValidation.result?.attempts_remaining,
-    });
-    return {
-      success: false,
-      error: pinValidation.error || "PIN validation failed",
-      statusCode: 401,
-    };
-  }
-
-  debugSuccess("PIN validation successful", { merchantId });
-  return { success: true };
-}
-
-// ============================================================================
 // Route Handlers
 // ============================================================================
 
 /**
  * POST /wallets/:walletId - EVM Transfer (USDC on Base)
+ * PIN validation is handled by pinValidationMiddleware
  */
-app.post("/:walletId", async (c) => {
+app.post("/:walletId", pinValidationMiddleware, async (c) => {
   const walletId = c.req.param("walletId");
   debugLog("Starting EVM transaction process", { walletId });
 
@@ -445,22 +391,6 @@ app.post("/:walletId", async (c) => {
       amount: transactionRequest.amount,
       cached: true,
     });
-  }
-
-  // PIN validation if required
-  const pinCheck = await validatePinIfRequired(
-    c,
-    supabase,
-    merchant.merchant_id,
-    merchant.has_pin,
-  );
-
-  if (!pinCheck.success) {
-    return c.json({
-      success: false,
-      error: pinCheck.error,
-      code: "PIN_REQUIRED",
-    }, pinCheck.statusCode || 400);
   }
 
   // Log transfer initiation
@@ -561,29 +491,11 @@ app.post("/:walletId", async (c) => {
 
 /**
  * POST /wallets/:walletId/enable-usdc - Enable USDC trustline on Stellar
+ * PIN validation is handled by pinValidationMiddleware
  */
-app.post("/:walletId/enable-usdc", async (c) => {
+app.post("/:walletId/enable-usdc", pinValidationMiddleware, async (c) => {
   const walletId = c.req.param("walletId");
   debugLog("Enable USDC - start", { walletId });
-
-  const supabase = c.get("supabase") as TypedSupabaseClient;
-  const merchant = getMerchantFromContext(c);
-
-  // PIN validation if required
-  const pinCheck = await validatePinIfRequired(
-    c,
-    supabase,
-    merchant.merchant_id,
-    merchant.has_pin,
-  );
-
-  if (!pinCheck.success) {
-    return c.json({
-      success: false,
-      error: pinCheck.error,
-      code: "PIN_REQUIRED",
-    }, pinCheck.statusCode || 400);
-  }
 
   try {
     // Validate wallet ownership
@@ -640,8 +552,9 @@ app.post("/:walletId/enable-usdc", async (c) => {
 
 /**
  * POST /wallets/:walletId/stellar-transfer - Transfer USDC on Stellar
+ * PIN validation is handled by pinValidationMiddleware
  */
-app.post("/:walletId/stellar-transfer", async (c) => {
+app.post("/:walletId/stellar-transfer", pinValidationMiddleware, async (c) => {
   const walletId = c.req.param("walletId");
   debugLog("Stellar Transfer - start", { walletId });
 
@@ -668,22 +581,6 @@ app.post("/:walletId/stellar-transfer", async (c) => {
   }
 
   const transferRequest: StellarTransferInput = validation.data;
-
-  // PIN validation if required
-  const pinCheck = await validatePinIfRequired(
-    c,
-    supabase,
-    merchant.merchant_id,
-    merchant.has_pin,
-  );
-
-  if (!pinCheck.success) {
-    return c.json({
-      success: false,
-      error: pinCheck.error,
-      code: "PIN_REQUIRED",
-    }, pinCheck.statusCode || 400);
-  }
 
   // Log transfer initiation
   logWalletTransfer(
