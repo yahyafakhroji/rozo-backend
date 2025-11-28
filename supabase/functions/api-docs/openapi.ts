@@ -772,11 +772,11 @@ X-Pin-Code: <6-digit-pin>
         },
       },
     },
-    "/wallets/{walletId}/stellar/trustline": {
+    "/wallets/{walletId}/enable-usdc": {
       post: {
         tags: ["Wallets"],
-        summary: "Create USDC trustline",
-        description: "Create a USDC trustline on Stellar network for the wallet",
+        summary: "Enable USDC on Stellar",
+        description: "Create a USDC trustline on Stellar network for the wallet (requires PIN if enabled)",
         security: [{ BearerAuth: [] }],
         parameters: [
           {
@@ -784,17 +784,10 @@ X-Pin-Code: <6-digit-pin>
             in: "path",
             required: true,
             schema: { type: "string" },
+            description: "Privy wallet ID",
           },
           { $ref: "#/components/parameters/PinCodeHeader" },
         ],
-        requestBody: {
-          required: true,
-          content: {
-            "application/json": {
-              schema: { $ref: "#/components/schemas/StellarTrustlineRequest" },
-            },
-          },
-        },
         responses: {
           "200": {
             description: "Trustline created successfully",
@@ -809,11 +802,11 @@ X-Pin-Code: <6-digit-pin>
         },
       },
     },
-    "/wallets/{walletId}/stellar/transfer": {
+    "/wallets/{walletId}/stellar-transfer": {
       post: {
         tags: ["Wallets"],
         summary: "Send Stellar USDC",
-        description: "Send USDC on Stellar network",
+        description: "Send USDC on Stellar network (requires PIN if enabled)",
         security: [{ BearerAuth: [] }],
         parameters: [
           {
@@ -821,6 +814,7 @@ X-Pin-Code: <6-digit-pin>
             in: "path",
             required: true,
             schema: { type: "string" },
+            description: "Privy wallet ID",
           },
           { $ref: "#/components/parameters/PinCodeHeader" },
         ],
