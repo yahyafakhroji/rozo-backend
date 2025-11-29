@@ -4,7 +4,7 @@
  */
 
 import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
-import type { Database } from "../../../database.types.ts";
+import type { Database } from "../database.types.ts";
 
 // Supabase client type
 export type TypedSupabaseClient = SupabaseClient<Database>;
@@ -20,8 +20,6 @@ export interface MerchantData {
   display_name?: string;
   description?: string;
   logo_url?: string;
-  wallet_address: string;
-  stellar_address?: string;
   default_currency?: string;
   default_token_id: string;
   default_language?: string;
@@ -88,7 +86,7 @@ export interface TokenData {
 }
 
 // ============================================================================
-// Merchant Wallet Types
+// Wallet Types
 // ============================================================================
 
 export type WalletSource = "privy" | "manual";
@@ -100,6 +98,7 @@ export interface MerchantWalletData {
   address: string;
   label?: string | null;
   source: WalletSource;
+  external_wallet_id?: string | null;
   is_primary: boolean;
   is_verified: boolean;
   created_at?: string;

@@ -145,7 +145,7 @@ async function sendPaymentNotifications(
   // Send Firebase Notification only for orders
   if (order.order_id) {
     const { data: devices, error: devicesError } = await supabase
-      .from("merchant_devices")
+      .from("devices")
       .select("fcm_token")
       .eq("merchant_id", order.merchant_id);
 

@@ -1,4 +1,0 @@
-{
-  "cron": "*/5 * * * *",
-  "description": "Process expired orders every 5 minutes"
-}

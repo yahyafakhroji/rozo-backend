@@ -4,7 +4,7 @@
  */
 
 import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
-import type { Database } from "../../../database.types.ts";
+import type { Database } from "../database.types.ts";
 
 export type TypedSupabaseClient = SupabaseClient<Database>;
 

@@ -1,7 +1,6 @@
 /**
  * Deposits Function
  * Handles deposit creation and listing
- * Refactored to use new middleware, factories, and type-safe utilities
  */
 
 import { Hono } from "jsr:@hono/hono";
@@ -14,9 +13,9 @@ import { corsConfig } from "../../_shared/config/index.ts";
 import {
   dualAuthMiddleware,
   errorMiddleware,
-  notFoundHandler,
-  merchantResolverMiddleware,
   getMerchantFromContext,
+  merchantResolverMiddleware,
+  notFoundHandler,
 } from "../../_shared/middleware/index.ts";
 
 // Services
@@ -28,17 +27,27 @@ import { createTransaction } from "../../_shared/factories/transactionFactory.ts
 // Schemas
 import {
   CreateDepositSchema,
-  PaginationSchema,
   OrderStatusSchema,
+  PaginationSchema,
   safeParseBody,
 } from "../../_shared/schemas/index.ts";
 
 // Types
 import type { TypedSupabaseClient } from "../../_shared/types/common.types.ts";
+import type { ApiResponse, PaginatedResponse } from "../../_shared/types/api.types.ts";
+import type {
+  CreateDepositData,
+  Deposit,
+  DepositData,
+} from "./types.ts";
+
+// ============================================================================
+// App Setup
+// ============================================================================
 
 const app = new Hono().basePath("/deposits");
 
-// Apply middleware stack
+// Global middleware
 app.use("*", cors(corsConfig));
 app.use("*", errorMiddleware);
 app.use("*", dualAuthMiddleware);
@@ -49,13 +58,13 @@ app.use("*", merchantResolverMiddleware);
 // ============================================================================
 
 /**
- * GET /deposits - Get all deposits for merchant
+ * GET /deposits - Get all deposits for merchant (paginated)
  */
 app.get("/", async (c) => {
   const supabase = c.get("supabase") as TypedSupabaseClient;
   const merchant = getMerchantFromContext(c);
 
-  // Parse and validate query parameters
+  // Parse pagination params
   const url = new URL(c.req.url);
   const paginationResult = safeParseBody(PaginationSchema, {
     limit: url.searchParams.get("limit") || undefined,
@@ -63,7 +72,11 @@ app.get("/", async (c) => {
   });
 
   if (!paginationResult.success) {
-    return c.json({ success: false, error: paginationResult.error }, 400);
+    return c.json<ApiResponse<null>>({
+      success: false,
+      error: paginationResult.error,
+      code: "VALIDATION_ERROR",
+    }, 400);
   }
 
   const { limit, offset } = paginationResult.data;
@@ -75,7 +88,11 @@ app.get("/", async (c) => {
   if (statusParam) {
     const statusResult = safeParseBody(OrderStatusSchema, statusParam);
     if (!statusResult.success) {
-      return c.json({ success: false, error: statusResult.error }, 400);
+      return c.json<ApiResponse<null>>({
+        success: false,
+        error: statusResult.error,
+        code: "VALIDATION_ERROR",
+      }, 400);
     }
     statusFilter = statusResult.data;
   }
@@ -89,7 +106,7 @@ app.get("/", async (c) => {
     return query.eq("status", statusFilter);
   };
 
-  // Execute queries in parallel for better performance
+  // Execute queries in parallel
   const [countResult, depositsResult] = await Promise.all([
     applyStatusFilter(
       supabase
@@ -111,15 +128,24 @@ app.get("/", async (c) => {
   const { data: deposits, error } = depositsResult;
 
   if (error) {
-    return c.json({ success: false, error: error.message }, 400);
+    return c.json<ApiResponse<null>>({
+      success: false,
+      error: error.message,
+      code: "DATABASE_ERROR",
+    }, 400);
   }
 
-  return c.json({
+  const total = totalCount || 0;
+
+  return c.json<PaginatedResponse<Deposit>>({
     success: true,
-    deposits: deposits || [],
-    total: totalCount || 0,
-    offset,
-    limit,
+    data: (deposits || []) as Deposit[],
+    pagination: {
+      total,
+      limit,
+      offset,
+      totalPages: Math.ceil(total / limit),
+    },
   });
 });
 
@@ -131,7 +157,6 @@ app.get("/:depositId", async (c) => {
   const merchant = getMerchantFromContext(c);
   const depositId = c.req.param("depositId");
 
-  // Get deposit
   const { data: deposit, error } = await supabase
     .from("deposits")
     .select("*")
@@ -140,17 +165,21 @@ app.get("/:depositId", async (c) => {
     .single();
 
   if (error || !deposit) {
-    return c.json({ success: false, error: "Deposit not found" }, 404);
+    return c.json<ApiResponse<null>>({
+      success: false,
+      error: "Deposit not found",
+      code: "NOT_FOUND",
+    }, 404);
   }
 
   const qrcode = getPaymentQrCodeUrl(deposit.payment_id);
 
-  return c.json({
+  return c.json<ApiResponse<DepositData>>({
     success: true,
-    deposit: {
+    data: {
       ...deposit,
       qrcode,
-    },
+    } as DepositData,
   });
 });
 
@@ -161,15 +190,15 @@ app.post("/", async (c) => {
   const supabase = c.get("supabase") as TypedSupabaseClient;
   const merchant = getMerchantFromContext(c);
 
-  // Parse and validate request body
-  const body = await c.req.json();
-  const validation = safeParseBody(CreateDepositSchema, body);
-
+  const validation = safeParseBody(CreateDepositSchema, await c.req.json());
   if (!validation.success) {
-    return c.json({ success: false, error: validation.error }, 400);
+    return c.json<ApiResponse<null>>({
+      success: false,
+      error: validation.error,
+      code: "VALIDATION_ERROR",
+    }, 400);
   }
 
-  // Create deposit using factory
   const result = await createTransaction({
     supabase,
     merchant,
@@ -178,28 +207,27 @@ app.post("/", async (c) => {
   });
 
   if (!result.success || !result.paymentDetail) {
-    const status = result.code ? 403 : 400;
-    return c.json(
-      { success: false, error: result.error, code: result.code },
-      status,
-    );
+    return c.json<ApiResponse<null>>({
+      success: false,
+      error: result.error || "Failed to create deposit",
+      code: result.code || "DEPOSIT_ERROR",
+    }, result.code ? 403 : 400);
   }
 
   const qrcode = getPaymentQrCodeUrl(result.paymentDetail.id);
 
-  return c.json(
-    {
-      success: true,
+  return c.json<ApiResponse<CreateDepositData>>({
+    success: true,
+    data: {
+      deposit_id: result.record_id!,
       qrcode,
-      deposit_id: result.record_id,
-      message: "Deposit created successfully",
     },
-    201,
-  );
+    message: "Deposit created successfully",
+  }, 201);
 });
 
 // Not found handler
 app.notFound(notFoundHandler);
 
-// Export for Deno
+// Export
 Deno.serve(app.fetch);

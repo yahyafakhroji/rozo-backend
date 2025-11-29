@@ -83,7 +83,7 @@ export async function getMerchantWallets(
 ): Promise<MerchantWalletResult> {
   try {
     const { data: wallets, error } = await supabase
-      .from("merchant_wallets")
+      .from("wallets")
       .select(`
         *,
         chain:chains(*)
@@ -114,7 +114,7 @@ export async function getMerchantWalletByChain(
 ): Promise<MerchantWalletResult> {
   try {
     const { data: wallet, error } = await supabase
-      .from("merchant_wallets")
+      .from("wallets")
       .select(`
         *,
         chain:chains(*)
@@ -147,7 +147,7 @@ export async function getWalletById(
 ): Promise<MerchantWalletResult> {
   try {
     const { data: wallet, error } = await supabase
-      .from("merchant_wallets")
+      .from("wallets")
       .select(`
         *,
         chain:chains(*)
@@ -186,7 +186,7 @@ export async function addMerchantWallet(
 
     // Check if this is the first wallet for this chain (auto-set as primary)
     const { count } = await supabase
-      .from("merchant_wallets")
+      .from("wallets")
       .select("*", { count: "exact", head: true })
       .eq("merchant_id", merchantId)
       .eq("chain_id", request.chain_id);
@@ -207,7 +207,7 @@ export async function addMerchantWallet(
     };
 
     const { data: wallet, error } = await supabase
-      .from("merchant_wallets")
+      .from("wallets")
       .insert(walletData)
       .select(`
         *,
@@ -260,7 +260,7 @@ export async function updateMerchantWallet(
     }
 
     const { data: wallet, error } = await supabase
-      .from("merchant_wallets")
+      .from("wallets")
       .update(updateData)
       .eq("wallet_id", walletId)
       .eq("merchant_id", merchantId)
@@ -301,7 +301,7 @@ export async function deleteMerchantWallet(
     // Don't allow deleting primary wallet if it's the only one for that chain
     if (existingWallet.wallet?.is_primary) {
       const { count } = await supabase
-        .from("merchant_wallets")
+        .from("wallets")
         .select("*", { count: "exact", head: true })
         .eq("merchant_id", merchantId)
         .eq("chain_id", existingWallet.wallet.chain_id);
@@ -315,7 +315,7 @@ export async function deleteMerchantWallet(
     }
 
     const { error } = await supabase
-      .from("merchant_wallets")
+      .from("wallets")
       .delete()
       .eq("wallet_id", walletId)
       .eq("merchant_id", merchantId);
@@ -350,7 +350,7 @@ export async function setWalletAsPrimary(
 
 /**
  * Get destination wallet address for a merchant based on their default token
- * This replaces the old getDestinationAddress function in merchant.service.ts
+ * Queries the wallets table for the primary wallet of the token's chain
  */
 export async function getDestinationWalletAddress(
   supabase: TypedSupabaseClient,
@@ -365,25 +365,6 @@ export async function getDestinationWalletAddress(
     const walletResult = await getMerchantWalletByChain(supabase, merchantId, chainId);
 
     if (!walletResult.success || !walletResult.wallet) {
-      // Fallback: Try to get from old merchant table columns for backward compatibility
-      const { data: merchant, error: merchantError } = await supabase
-        .from("merchants")
-        .select("wallet_address, stellar_address")
-        .eq("merchant_id", merchantId)
-        .single();
-
-      if (merchantError || !merchant) {
-        return { success: false, error: "Merchant not found" };
-      }
-
-      // Use legacy columns as fallback
-      if (chainId === "stellar" && merchant.stellar_address) {
-        return { success: true, address: merchant.stellar_address };
-      }
-      if (merchant.wallet_address) {
-        return { success: true, address: merchant.wallet_address };
-      }
-
       return { success: false, error: `No wallet found for chain ${chainId}` };
     }
 
@@ -397,7 +378,7 @@ export async function getDestinationWalletAddress(
 }
 
 /**
- * Sync Privy wallet to merchant_wallets table
+ * Sync Privy wallet to wallets table
  * Called when user logs in or updates their Privy wallet
  */
 export async function syncPrivyWallet(
@@ -409,7 +390,7 @@ export async function syncPrivyWallet(
   try {
     // Check if wallet already exists
     const { data: existing } = await supabase
-      .from("merchant_wallets")
+      .from("wallets")
       .select("wallet_id")
       .eq("merchant_id", merchantId)
       .eq("chain_id", chainId)

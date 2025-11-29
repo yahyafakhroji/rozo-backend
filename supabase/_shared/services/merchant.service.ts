@@ -30,11 +30,9 @@ export async function validateMerchant(
       .select(`
         merchant_id,
         privy_id,
-        wallet_address,
         status,
         default_token_id,
-        logo_url,
-        stellar_address
+        logo_url
       `)
       .eq("privy_id", privyId)
       .single();
@@ -173,15 +171,23 @@ export async function resolvePreferredToken(
 }
 
 /**
- * Get destination address based on token type
+ * Get destination address based on token's chain
+ * Queries wallets table for the primary wallet of the token's chain
  */
-export function getDestinationAddress(
-  merchant: MerchantData,
-): string | null {
-  if (merchant.default_token_id === "USDC_XLM") {
-    return merchant.stellar_address || null;
-  }
-  return merchant.wallet_address || null;
+export async function getDestinationAddress(
+  supabase: TypedSupabaseClient,
+  merchantId: string,
+  chainId: string,
+): Promise<string | null> {
+  const { data: wallet } = await supabase
+    .from("wallets")
+    .select("address")
+    .eq("merchant_id", merchantId)
+    .eq("chain_id", chainId)
+    .eq("is_primary", true)
+    .single();
+
+  return wallet?.address || null;
 }
 
 // ============================================================================

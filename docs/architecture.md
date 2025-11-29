@@ -34,8 +34,16 @@ This document covers the technical architecture, project structure, and core fun
 │   │   ├── schemas/       # Zod validation schemas
 │   │   └── factories/     # Transaction factory
 │   ├── functions/         # Core application logic as Edge Functions
-│   │   ├── merchants/     # Merchant profiles and settings management
+│   │   ├── profile/       # Merchant profile and PIN management
 │   │   │   ├── index.ts   # Main entry point
+│   │   │   └── deno.json  # Deno configuration
+│   │   ├── wallets/       # Multi-chain wallet management
+│   │   │   ├── index.ts   # Main entry point
+│   │   │   └── deno.json  # Deno configuration
+│   │   ├── transfers/     # EVM and Stellar transfers
+│   │   │   ├── index.ts   # Main entry point
+│   │   │   ├── transfer.ts # Stellar transfer logic
+│   │   │   ├── trustline.ts # Stellar trustline logic
 │   │   │   └── deno.json  # Deno configuration
 │   │   ├── orders/        # Order lifecycle management
 │   │   │   ├── index.ts   # Main entry point
@@ -50,25 +58,26 @@ This document covers the technical architecture, project structure, and core fun
 │   │   │   ├── index.ts   # Webhook handler (no auth required)
 │   │   │   ├── pusher.ts  # Pusher notifications integration
 │   │   │   └── deno.json  # Deno configuration
-│   │   ├── expired-orders/ # Automated expired order processing
-│   │   │   ├── index.ts   # Cron job for expired order cleanup
-│   │   │   ├── cron.json  # Cron schedule (every 5 minutes)
-│   │   │   └── README.md  # Function documentation
-│   │   └── update-currencies/ # Currency rate updates (cron job)
-│   │       ├── index.ts   # Currency update logic
-│   │       ├── cron.json  # Cron schedule configuration
-│   │       └── README.md  # Function documentation
-│   ├── migrations/        # Database schema migrations
+│   │   ├── cron/          # Consolidated cron jobs
+│   │   │   ├── index.ts   # Expired orders + currency updates
+│   │   │   └── deno.json  # Deno configuration
+│   ├── migrations/        # Database schema migrations (16 files)
 │   │   ├── 20250618174036_initial_setup.sql
 │   │   ├── 20250621085630_withdrawals.sql
 │   │   ├── 20250623074412_order_number.sql
 │   │   ├── 20250630142432_deposits.sql
 │   │   ├── 20250914172526_remote_schema.sql
-│   │   ├── 20250914172728_add_privy_id.sql # Privy integration
-│   │   ├── 20251020111110_add_merchant_pincode_status.sql # PIN code & status
-│   │   ├── 20251022120000_add_orders_expired_payment_data.sql # Order enhancements
-│   │   ├── 20251023000000_add_preferred_token_id_to_orders.sql # Preferred token system
-│   │   └── 20251127153804_wallet_management_restructure.sql # Multi-chain wallet management
+│   │   ├── 20250914172728_add_privy_id.sql
+│   │   ├── 20251020111110_add_merchant_pincode_status.sql
+│   │   ├── 20251022120000_add_orders_expired_payment_data.sql
+│   │   ├── 20251023000000_add_preferred_token_id_to_orders.sql
+│   │   ├── 20251031000000_create_merchant_devices.sql
+│   │   ├── 20251101133527_add_stellar_wallet.sql
+│   │   ├── 20251127000000_add_performance_indexes.sql
+│   │   ├── 20251127072630_remote_schema.sql
+│   │   ├── 20251127132819_restore_audit_logs.sql
+│   │   ├── 20251127153804_wallet_management_restructure.sql
+│   │   └── 20251128000000_remove_dynamic_auth.sql
 │   └── seed.sql           # Initial data for development
 ```
 
@@ -76,23 +85,52 @@ This document covers the technical architecture, project structure, and core fun
 
 Core backend logic is handled by these Supabase Edge Functions:
 
-### 1. `/merchants`
+### 1. `/profile`
 
-- **Manages**: Merchant profiles (create, read, update) and wallet management
+- **Manages**: Merchant profiles (create, read, update) and PIN management
 - **Auth**: Privy JWT
-- **Features**: Profile management, logo upload, merchant settings, multi-chain wallet management
+- **Features**: Profile management, logo upload, merchant settings, PIN operations
 - **Database**: Uses `privy_id` column for merchant identification
-- **Wallet Endpoints**:
-  - `GET /merchants/chains` - List supported blockchain networks
-  - `GET /merchants/wallets` - List merchant's wallets
-  - `GET /merchants/wallets/{walletId}` - Get wallet details
-  - `POST /merchants/wallets` - Add new wallet
-  - `PUT /merchants/wallets/{walletId}` - Update wallet (label, primary)
-  - `PUT /merchants/wallets/{walletId}/primary` - Set wallet as primary for its chain
-  - `DELETE /merchants/wallets/{walletId}` - Remove wallet
-  - `POST /merchants/wallets/sync` - Sync Privy embedded wallet
+- **Endpoints**:
+  - `GET /profile` - Get merchant profile
+  - `POST /profile` - Create merchant profile
+  - `PUT /profile` - Update merchant profile
+  - `GET /profile/status` - Check profile and PIN status
+  - `POST /profile/pin` - Set PIN
+  - `PUT /profile/pin` - Update PIN
+  - `DELETE /profile/pin` - Revoke PIN
+  - `POST /profile/pin/validate` - Validate PIN
 
-### 2. `/orders`
+### 2. `/wallets`
+
+- **Manages**: Multi-chain wallet management
+- **Auth**: Privy JWT
+- **Features**: Wallet CRUD, chain listing, Privy wallet sync
+- **Endpoints**:
+  - `GET /wallets` - List merchant's wallets
+  - `POST /wallets` - Add new wallet
+  - `GET /wallets/chains` - List supported blockchain networks
+  - `POST /wallets/sync` - Sync Privy embedded wallet
+  - `GET /wallets/{walletId}` - Get wallet details
+  - `PUT /wallets/{walletId}` - Update wallet (label)
+  - `DELETE /wallets/{walletId}` - Remove wallet
+  - `PUT /wallets/{walletId}/primary` - Set wallet as primary for its chain
+
+### 3. `/transfers`
+
+- **Manages**: Multi-chain wallet transfers and operations
+- **Auth**: Privy JWT + PIN validation
+- **Features**:
+  - EVM transfers (USDC on Base)
+  - Stellar trustline setup
+  - Stellar USDC transfers
+  - Transaction caching to prevent duplicates
+- **Endpoints**:
+  - `POST /transfers/evm` - EVM chain transfer
+  - `POST /transfers/stellar` - Stellar transfer
+  - `POST /transfers/stellar/trustline` - Enable USDC trustline
+
+### 4. `/orders`
 
 - **Manages**: Order lifecycle (creation, retrieval, status tracking, payment regeneration)
 - **Auth**: Privy JWT
@@ -111,7 +149,7 @@ Core backend logic is handled by these Supabase Edge Functions:
   - `POST /orders/{id}/regenerate-payment` - Regenerate payment link
 - **Integrates with**: Daimo Pay for payment processing, currency cache, tokens table
 
-### 3. `/deposits`
+### 5. `/deposits`
 
 - **Framework**: Built with Hono for modern routing and middleware
 - **Manages**: Merchant deposit requests and tracking
@@ -119,13 +157,13 @@ Core backend logic is handled by these Supabase Edge Functions:
 - **Features**: Deposit creation, history retrieval, status tracking
 - **Integrates with**: Daimo Pay for payment processing
 
-### 4. `/withdrawals`
+### 6. `/withdrawals`
 
 - **Manages**: Merchant withdrawal requests and processing
 - **Auth**: Privy JWT + PIN validation
 - **Features**: Withdrawal creation, history retrieval
 
-### 5. `/payment-callback`
+### 7. `/payment-callback`
 
 - **Handles**: Incoming webhooks from Daimo Pay
 - **Actions**: Updates order/deposit status, validates payment data
@@ -133,24 +171,43 @@ Core backend logic is handled by these Supabase Edge Functions:
 - **Features**: Status transition validation, duplicate webhook handling
 - **Integrates with**: Pusher for real-time notifications
 
-### 6. `/expired-orders`
+### 8. `/cron`
 
-- **Type**: Cron job function
-- **Manages**: Automatic processing of expired orders
-- **Schedule**: Every 5 minutes (`*/5 * * * *`)
+- **Type**: Consolidated cron job function
+- **Manages**: Expired orders processing and currency rate updates
 - **Features**:
   - Updates expired PENDING orders to EXPIRED status
   - Handles orders with and without `expired_at` field
+  - Fetches rates from ExchangeRate-API, updates database
   - Performance monitoring and statistics
-  - Merchant notification logging
-- **Endpoints**: Health check, manual trigger for testing
+- **Endpoints**:
+  - `POST /cron/expired-orders` - Process expired orders
+  - `GET /cron/expired-orders/health` - Health check
+  - `POST /cron/expired-orders/trigger` - Manual trigger for testing
+  - `POST /cron/update-currencies` - Update currency rates
 
-### 7. `/update-currencies`
+### 9. `/devices`
 
-- **Type**: Cron job function
-- **Manages**: Currency exchange rate updates
-- **Schedule**: Automated updates via cron
-- **Features**: Fetches rates from ExchangeRate-API, updates database
+- **Manages**: Push notification device registration
+- **Auth**: Privy JWT
+- **Features**: FCM token management, device registration/unregistration
+- **Endpoints**:
+  - `POST /devices` - Register device with FCM token
+  - `DELETE /devices/:deviceId` - Unregister device
+
+### 10. `/reports`
+
+- **Manages**: Dashboard analytics and reporting
+- **Auth**: Privy JWT
+- **Features**: Transaction summaries, time-series data, currency breakdowns
+- **Endpoints**:
+  - `GET /reports/summary` - Dashboard report with date range and grouping
+
+### 11. `/api-docs`
+
+- **Manages**: OpenAPI/Swagger documentation
+- **Auth**: Public (no authentication)
+- **Features**: Interactive API documentation
 
 ## Authentication Architecture
 

@@ -314,16 +314,23 @@ s3_access_key = "env(S3_ACCESS_KEY)"
 # Configures AWS_SECRET_ACCESS_KEY for S3 bucket
 s3_secret_key = "env(S3_SECRET_KEY)"
 
-[functions.merchants]
+[functions.profile]
 enabled = true
 verify_jwt = false
-import_map = "./functions/merchants/deno.json"
-# Uncomment to specify a custom file path to the entrypoint.
-# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
-entrypoint = "./functions/merchants/index.ts"
-# Specifies static files to be bundled with the function. Supports glob patterns.
-# For example, if you want to serve static HTML pages in your function:
-# static_files = [ "./functions/merchants/*.html" ]
+import_map = "./functions/profile/deno.json"
+entrypoint = "./functions/profile/index.ts"
+
+[functions.transfers]
+enabled = true
+verify_jwt = false
+import_map = "./functions/transfers/deno.json"
+entrypoint = "./functions/transfers/index.ts"
+
+[functions.cron]
+enabled = true
+verify_jwt = false
+import_map = "./functions/cron/deno.json"
+entrypoint = "./functions/cron/index.ts"
 
 [functions.orders]
 enabled = true

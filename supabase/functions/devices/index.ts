@@ -1,7 +1,6 @@
 /**
  * Devices Function
  * Handles device registration for push notifications
- * Refactored to use new middleware and type-safe utilities
  */
 
 import { Hono } from "jsr:@hono/hono";
@@ -12,26 +11,31 @@ import { corsConfig } from "../../_shared/config/index.ts";
 
 // Middleware
 import {
-  privyAuthMiddleware,
   errorMiddleware,
-  notFoundHandler,
-  merchantResolverMiddleware,
   getMerchantFromContext,
+  merchantResolverMiddleware,
+  notFoundHandler,
+  privyAuthMiddleware,
 } from "../../_shared/middleware/index.ts";
 
 // Schemas
 import {
   RegisterDeviceSchema,
-  UnregisterDeviceSchema,
   safeParseBody,
 } from "../../_shared/schemas/index.ts";
 
 // Types
 import type { TypedSupabaseClient } from "../../_shared/types/common.types.ts";
+import type { ApiResponse } from "../../_shared/types/api.types.ts";
+import type { DeviceData } from "./types.ts";
+
+// ============================================================================
+// App Setup
+// ============================================================================
 
 const app = new Hono().basePath("/devices");
 
-// Apply middleware
+// Global middleware
 app.use("*", cors(corsConfig));
 app.use("*", errorMiddleware);
 app.use("*", privyAuthMiddleware);
@@ -42,25 +46,25 @@ app.use("*", merchantResolverMiddleware);
 // ============================================================================
 
 /**
- * POST /devices/register - Register device for push notifications
+ * POST /devices - Register device for push notifications
  */
-app.post("/register", async (c) => {
+app.post("/", async (c) => {
   const supabase = c.get("supabase") as TypedSupabaseClient;
   const merchant = getMerchantFromContext(c);
 
-  // Parse and validate request
-  const body = await c.req.json();
-  const validation = safeParseBody(RegisterDeviceSchema, body);
-
+  const validation = safeParseBody(RegisterDeviceSchema, await c.req.json());
   if (!validation.success) {
-    return c.json({ success: false, error: validation.error }, 400);
+    return c.json<ApiResponse<null>>({
+      success: false,
+      error: validation.error,
+      code: "VALIDATION_ERROR",
+    }, 400);
   }
 
   const { device_id, fcm_token, platform } = validation.data;
 
-  // Upsert device
   const { data, error } = await supabase
-    .from("merchant_devices")
+    .from("devices")
     .upsert(
       {
         merchant_id: merchant.merchant_id,
@@ -75,47 +79,53 @@ app.post("/register", async (c) => {
     .single();
 
   if (error) {
-    return c.json({ success: false, error: error.message }, 500);
+    return c.json<ApiResponse<null>>({
+      success: false,
+      error: error.message,
+      code: "DATABASE_ERROR",
+    }, 500);
   }
 
-  return c.json({
+  return c.json<ApiResponse<DeviceData>>({
     success: true,
-    data,
+    data: data as DeviceData,
     message: "Device registered successfully",
-  });
+  }, 201);
 });
 
 /**
- * DELETE /devices/unregister - Unregister device
+ * DELETE /devices/:deviceId - Unregister device
  */
-app.delete("/unregister", async (c) => {
+app.delete("/:deviceId", async (c) => {
   const supabase = c.get("supabase") as TypedSupabaseClient;
   const merchant = getMerchantFromContext(c);
+  const deviceId = c.req.param("deviceId");
 
-  // Parse and validate request
-  const body = await c.req.json();
-  const validation = safeParseBody(UnregisterDeviceSchema, body);
-
-  if (!validation.success) {
-    return c.json({ success: false, error: validation.error }, 400);
+  if (!deviceId) {
+    return c.json<ApiResponse<null>>({
+      success: false,
+      error: "Device ID is required",
+      code: "VALIDATION_ERROR",
+    }, 400);
   }
 
-  const { device_id } = validation.data;
-
-  // Delete device
   const { error } = await supabase
-    .from("merchant_devices")
+    .from("devices")
     .delete()
     .match({
       merchant_id: merchant.merchant_id,
-      device_id,
+      device_id: deviceId,
     });
 
   if (error) {
-    return c.json({ success: false, error: error.message }, 500);
+    return c.json<ApiResponse<null>>({
+      success: false,
+      error: error.message,
+      code: "DATABASE_ERROR",
+    }, 500);
   }
 
-  return c.json({
+  return c.json<ApiResponse<null>>({
     success: true,
     message: "Device unregistered successfully",
   });
@@ -124,5 +134,5 @@ app.delete("/unregister", async (c) => {
 // Not found handler
 app.notFound(notFoundHandler);
 
-// Export for Deno
+// Export
 Deno.serve(app.fetch);

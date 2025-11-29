@@ -176,5 +176,5 @@ $$ LANGUAGE plpgsql STABLE;
 -- They will be dropped in a future migration after code is fully migrated
 -- ============================================================================
 -- Future migration will include:
--- ALTER TABLE "public"."merchants" DROP COLUMN IF EXISTS "wallet_address";
--- ALTER TABLE "public"."merchants" DROP COLUMN IF EXISTS "stellar_address";
+ALTER TABLE "public"."merchants" DROP COLUMN IF EXISTS "wallet_address";
+ALTER TABLE "public"."merchants" DROP COLUMN IF EXISTS "stellar_address";
