@@ -12,15 +12,13 @@ import { corsConfig } from "../../_shared/config/index.ts";
 
 // Middleware
 import {
-  dualAuthMiddleware,
+  privyAuthMiddleware,
   errorMiddleware,
   notFoundHandler,
   merchantResolverMiddleware,
   getMerchantFromContext,
+  pinValidationMiddleware,
 } from "../../_shared/middleware/index.ts";
-
-// Services
-import { requirePinValidation } from "../../_shared/services/merchant.service.ts";
 import {
   logWithdrawalEvent,
   AuditAction,
@@ -34,7 +32,6 @@ import {
 } from "../../_shared/schemas/index.ts";
 
 // Utils
-import { extractPinFromHeaders } from "../../_shared/utils/helpers.ts";
 import { rateLimitByMerchant, RATE_LIMITS } from "../../_shared/utils/rateLimit.utils.ts";
 
 // Types
@@ -45,7 +42,7 @@ const app = new Hono().basePath("/withdrawals");
 // Apply middleware
 app.use("*", cors(corsConfig));
 app.use("*", errorMiddleware);
-app.use("*", dualAuthMiddleware);
+app.use("*", privyAuthMiddleware);
 app.use("*", merchantResolverMiddleware);
 
 // ============================================================================
@@ -112,15 +109,16 @@ app.get("/", async (c) => {
 
 /**
  * POST /withdrawals - Create withdrawal request
+ * PIN validation is handled by pinValidationMiddleware
  */
-app.post("/", async (c) => {
+app.post("/", pinValidationMiddleware, async (c) => {
   const supabase = c.get("supabase") as TypedSupabaseClient;
   const merchant = getMerchantFromContext(c);
 
   // Apply rate limiting for withdrawals
   try {
     rateLimitByMerchant(merchant.merchant_id, "withdrawals", RATE_LIMITS.WITHDRAWAL);
-  } catch (error) {
+  } catch (_error) {
     return c.json({
       success: false,
       error: "Too many withdrawal requests. Please try again later.",
@@ -137,39 +135,6 @@ app.post("/", async (c) => {
   }
 
   const { recipient, amount, currency } = validation.data;
-
-  // Check if merchant has PIN set and validate
-  if (merchant.has_pin) {
-    const pinCode = extractPinFromHeaders(c.req.raw);
-
-    if (!pinCode) {
-      return c.json({
-        success: false,
-        error: "PIN code is required for withdrawal operations",
-        code: "PIN_REQUIRED",
-      }, 400);
-    }
-
-    const ipAddress = c.req.header("x-forwarded-for") || c.req.header("x-real-ip") || "unknown";
-    const userAgent = c.req.header("user-agent") || "unknown";
-
-    const pinValidation = await requirePinValidation({
-      supabase,
-      merchantId: merchant.merchant_id,
-      pinCode,
-      ipAddress,
-      userAgent,
-    });
-
-    if (!pinValidation.success) {
-      return c.json({
-        success: false,
-        error: pinValidation.error,
-        attempts_remaining: pinValidation.result?.attempts_remaining,
-        is_blocked: pinValidation.result?.is_blocked,
-      }, 401);
-    }
-  }
 
   // Insert withdrawal record
   const now = new Date().toISOString();

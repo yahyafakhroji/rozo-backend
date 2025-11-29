@@ -1,18 +1,17 @@
 /**
  * Authentication Middleware
- * Dual authentication middleware for Hono (Privy + Dynamic)
+ * Privy authentication middleware for Hono
  */
 
 import { Context, Next, MiddlewareHandler } from "jsr:@hono/hono";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { extractBearerToken, verifyDynamicJWT, verifyPrivyJWT } from "../utils/jwt.utils.ts";
+import { extractBearerToken, verifyPrivyJWT } from "../utils/jwt.utils.ts";
 import { MerchantStatus } from "../config/constants.ts";
 
 /**
  * Environment variables interface
  */
 interface AuthEnvVars {
-  dynamicEnvId: string;
   privyAppId: string;
   privyAppSecret: string;
   supabaseUrl: string;
@@ -23,18 +22,16 @@ interface AuthEnvVars {
  * Get authentication environment variables
  */
 function getAuthEnvVars(): AuthEnvVars | null {
-  const dynamicEnvId = Deno.env.get("DYNAMIC_ENV_ID");
   const privyAppId = Deno.env.get("PRIVY_APP_ID");
   const privyAppSecret = Deno.env.get("PRIVY_APP_SECRET");
   const supabaseUrl = Deno.env.get("ROZO_SUPABASE_URL");
   const supabaseKey = Deno.env.get("ROZO_SUPABASE_SERVICE_ROLE_KEY");
 
-  if (!dynamicEnvId || !privyAppId || !privyAppSecret || !supabaseUrl || !supabaseKey) {
+  if (!privyAppId || !privyAppSecret || !supabaseUrl || !supabaseKey) {
     return null;
   }
 
   return {
-    dynamicEnvId,
     privyAppId,
     privyAppSecret,
     supabaseUrl,
@@ -43,16 +40,14 @@ function getAuthEnvVars(): AuthEnvVars | null {
 }
 
 /**
- * Dual authentication middleware for Hono
- * Supports both Privy and Dynamic authentication
+ * Privy authentication middleware for Hono
  * Sets the following context variables:
  * - supabase: Supabase client
- * - dynamicId: User provider ID (from Dynamic or Privy)
+ * - privyId: User's Privy ID
  * - walletAddress: User's wallet address
- * - isPrivyAuth: Boolean indicating if auth is via Privy
  * - token: Original JWT token
  */
-export const dualAuthMiddleware: MiddlewareHandler = async (
+export const privyAuthMiddleware: MiddlewareHandler = async (
   c: Context,
   next: Next,
 ) => {
@@ -80,41 +75,23 @@ export const dualAuthMiddleware: MiddlewareHandler = async (
     envVars.privyAppSecret,
   );
 
-  // Verify with Dynamic
-  const tokenVerification = await verifyDynamicJWT(token, envVars.dynamicEnvId);
-
-  // Both failed
-  if (!tokenVerification.success && !privy.success) {
+  if (!privy.success) {
     return c.json(
       {
         error: "Invalid or expired token",
-        details: tokenVerification.error || privy.error,
+        details: privy.error,
       },
       401,
     );
   }
 
-  // Determine user provider ID and wallet address
-  let userProviderId: string | null = null;
-  let userProviderWalletAddress: string | null = null;
-  let isPrivyAuth = false;
+  const privyId = privy.payload?.id || null;
+  const walletAddress = privy.embedded_wallet_address || null;
 
-  if (tokenVerification.success) {
-    userProviderId = tokenVerification.payload?.sub || null;
-    userProviderWalletAddress = tokenVerification.embedded_wallet_address || null;
-  }
-
-  // Privy takes precedence
-  if (privy.success) {
-    userProviderId = privy.payload?.id || null;
-    userProviderWalletAddress = privy.embedded_wallet_address || null;
-    isPrivyAuth = true;
-  }
-
-  if (!userProviderWalletAddress || !userProviderId) {
+  if (!walletAddress || !privyId) {
     return c.json(
       {
-        error: "Missing embedded wallet address or user provider id",
+        error: "Missing embedded wallet address or user id",
       },
       422,
     );
@@ -130,9 +107,8 @@ export const dualAuthMiddleware: MiddlewareHandler = async (
 
   // Set context variables
   c.set("supabase", supabase);
-  c.set("dynamicId", userProviderId);
-  c.set("walletAddress", userProviderWalletAddress);
-  c.set("isPrivyAuth", isPrivyAuth);
+  c.set("privyId", privyId);
+  c.set("walletAddress", walletAddress);
   c.set("token", token);
 
   await next();
@@ -140,7 +116,7 @@ export const dualAuthMiddleware: MiddlewareHandler = async (
 
 /**
  * Merchant status check middleware
- * Must be used after dualAuthMiddleware
+ * Must be used after privyAuthMiddleware
  * Blocks requests from PIN_BLOCKED or INACTIVE merchants
  */
 export const merchantStatusMiddleware: MiddlewareHandler = async (
@@ -148,21 +124,18 @@ export const merchantStatusMiddleware: MiddlewareHandler = async (
   next: Next,
 ) => {
   const supabase = c.get("supabase");
-  const userProviderId = c.get("dynamicId");
-  const isPrivyAuth = c.get("isPrivyAuth");
+  const privyId = c.get("privyId");
 
-  if (!supabase || !userProviderId) {
+  if (!supabase || !privyId) {
     return c.json({ error: "Authentication required" }, 401);
   }
 
   // Get merchant status
-  const merchantQuery = supabase
+  const { data: merchant, error: merchantError } = await supabase
     .from("merchants")
-    .select("merchant_id, status");
-
-  const { data: merchant, error: merchantError } = isPrivyAuth
-    ? await merchantQuery.eq("privy_id", userProviderId).single()
-    : await merchantQuery.eq("dynamic_id", userProviderId).single();
+    .select("merchant_id, status")
+    .eq("privy_id", privyId)
+    .single();
 
   if (merchantError || !merchant) {
     return c.json({ error: "Merchant not found" }, 404);
@@ -204,7 +177,7 @@ export const authWithStatusMiddleware: MiddlewareHandler = async (
 ) => {
   // First run auth middleware
   let nextCalled = false;
-  await dualAuthMiddleware(c, async () => {
+  await privyAuthMiddleware(c, async () => {
     nextCalled = true;
   });
 
@@ -218,9 +191,8 @@ export const authWithStatusMiddleware: MiddlewareHandler = async (
 declare module "jsr:@hono/hono" {
   interface ContextVariableMap {
     supabase: ReturnType<typeof createClient>;
-    dynamicId: string;
+    privyId: string;
     walletAddress: string;
-    isPrivyAuth: boolean;
     token: string;
     merchantId: string;
   }

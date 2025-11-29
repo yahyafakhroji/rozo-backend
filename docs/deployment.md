@@ -48,15 +48,13 @@ ROZO_SUPABASE_URL=your_supabase_project_url
 ROZO_SUPABASE_SERVICE_ROLE_KEY=your_supabase_service_role_key
 ```
 
-#### Authentication Providers
+#### Authentication (Privy)
 
 ```bash
-# Dynamic Authentication
-DYNAMIC_ENV_ID=your_dynamic_environment_id
-
-# Privy Authentication
 PRIVY_APP_ID=your_privy_app_id
 PRIVY_APP_SECRET=your_privy_app_secret
+PRIVY_POLICY_ID=your_privy_policy_id
+PRIVY_AUTHORIZATION_PRIVATE_KEY=your_privy_authorization_key
 ```
 
 #### Payment Processing
@@ -80,7 +78,6 @@ PUSHER_CLUSTER=your_pusher_cluster
 ### 3. Environment Variable Sources
 
 - **Supabase**: Get from your Supabase project dashboard
-- **Dynamic**: Get from Dynamic dashboard
 - **Privy**: Get from Privy dashboard
 - **Daimo**: Get from Daimo Pay dashboard
 - **Pusher**: Get from Pusher dashboard
@@ -160,10 +157,11 @@ In your Supabase project dashboard, go to Settings > Edge Functions and set:
 ROZO_SUPABASE_URL=your_production_supabase_url
 ROZO_SUPABASE_SERVICE_ROLE_KEY=your_production_service_role_key
 
-# Authentication
-DYNAMIC_ENV_ID=your_production_dynamic_env_id
+# Authentication (Privy)
 PRIVY_APP_ID=your_production_privy_app_id
 PRIVY_APP_SECRET=your_production_privy_app_secret
+PRIVY_POLICY_ID=your_production_privy_policy_id
+PRIVY_AUTHORIZATION_PRIVATE_KEY=your_production_privy_auth_key
 
 # Payments
 DAIMO_API_KEY=your_production_daimo_api_key
@@ -250,7 +248,7 @@ curl -X POST "https://your-project.supabase.co/functions/v1/update-currencies"
 
 Configure webhook URL in Daimo Pay dashboard:
 
-```
+```text
 https://your-project.supabase.co/functions/v1/payment-callback
 ```
 

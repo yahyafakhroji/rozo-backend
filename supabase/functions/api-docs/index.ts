@@ -88,9 +88,7 @@ const swaggerUIHtml = (specUrl: string) => `
  * GET /api-docs - Swagger UI
  */
 app.get("/", (c) => {
-  const specUrl = `${
-    Deno.env.get("ROZO_SUPABASE_URL")
-  }/functions/v1/api-docs/openapi.json`;
+  const specUrl = `http://127.0.0.1:54321/functions/v1/api-docs/openapi.json`;
 
   return c.html(swaggerUIHtml(specUrl));
 });

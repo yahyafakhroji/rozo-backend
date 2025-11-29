@@ -1,4 +1,4 @@
-import { generateAuthorizationSignature, PrivyClient } from "@privy-io/node";
+import { generateAuthorizationSignature, PrivyClient } from "npm:@privy-io/node";
 import { Buffer } from "node:buffer";
 import {
   BASE_FEE,
@@ -8,7 +8,7 @@ import {
   Operation,
   Transaction,
   TransactionBuilder,
-} from "stellar-sdk";
+} from "npm:stellar-sdk";
 import {
   getMainnetServer,
   getStellarErrorMessage,

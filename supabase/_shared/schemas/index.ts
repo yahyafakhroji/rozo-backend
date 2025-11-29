@@ -177,6 +177,7 @@ export type UnregisterDeviceInput = z.infer<typeof UnregisterDeviceSchema>;
  * Transaction request schema (EVM)
  */
 export const TransactionRequestSchema = z.object({
+  walletId: z.string().min(1, "Wallet ID is required"),
   recipientAddress: EthereumAddressSchema,
   amount: PositiveAmountSchema,
   signature: z.string().min(1, "Signature is required"),
@@ -189,6 +190,7 @@ export type TransactionRequestInput = z.infer<typeof TransactionRequestSchema>;
  * Stellar transfer request schema
  */
 export const StellarTransferSchema = z.object({
+  walletId: z.string().min(1, "Wallet ID is required"),
   destinationAddress: StellarAddressSchema,
   amount: z.union([
     z.number().positive(),

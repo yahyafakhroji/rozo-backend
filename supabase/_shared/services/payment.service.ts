@@ -11,7 +11,8 @@ import type {
   MerchantData,
   TokenData,
 } from "../types/common.types.ts";
-import { getDestinationAddress } from "./merchant.service.ts";
+// Note: Destination address is now resolved from wallets table
+// and passed as a parameter to payment functions
 
 /**
  * Create Daimo payment link
@@ -144,9 +145,10 @@ export async function createDaimoPaymentLink(
 
 /**
  * Create payment link for order
+ * @param destinationAddress - The merchant's wallet address for this chain (from wallets table)
  */
 export async function createOrderPaymentLink(
-  merchant: MerchantData,
+  _merchant: MerchantData,
   orderData: {
     display_currency: string;
     display_amount: number;
@@ -158,10 +160,9 @@ export async function createOrderPaymentLink(
   formattedUsdAmount: number,
   destinationToken: TokenData,
   preferredToken: TokenData,
+  destinationAddress: string,
 ): Promise<{ success: boolean; paymentDetail?: DaimoPayment; error?: string }> {
   try {
-    const destinationAddress = getDestinationAddress(merchant);
-
     if (!destinationAddress) {
       return {
         success: false,
@@ -201,9 +202,10 @@ export async function createOrderPaymentLink(
 
 /**
  * Create payment link for deposit
+ * @param destinationAddress - The merchant's wallet address for this chain (from wallets table)
  */
 export async function createDepositPaymentLink(
-  merchant: MerchantData,
+  _merchant: MerchantData,
   depositData: {
     display_currency: string;
     display_amount: number;
@@ -212,10 +214,9 @@ export async function createDepositPaymentLink(
   depositNumber: string,
   formattedUsdAmount: number,
   token: TokenData,
+  destinationAddress: string,
 ): Promise<{ success: boolean; paymentDetail?: DaimoPayment; error?: string }> {
   try {
-    const destinationAddress = getDestinationAddress(merchant);
-
     if (!destinationAddress) {
       return {
         success: false,

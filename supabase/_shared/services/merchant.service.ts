@@ -22,26 +22,20 @@ import type {
  */
 export async function validateMerchant(
   supabase: TypedSupabaseClient,
-  userProviderId: string,
-  isPrivyAuth: boolean,
+  privyId: string,
 ): Promise<MerchantValidationResult> {
   try {
-    const merchantQuery = supabase
+    const { data: merchant, error: merchantError } = await supabase
       .from("merchants")
       .select(`
         merchant_id,
-        dynamic_id,
         privy_id,
-        wallet_address,
         status,
         default_token_id,
-        logo_url,
-        stellar_address
-      `);
-
-    const { data: merchant, error: merchantError } = isPrivyAuth
-      ? await merchantQuery.eq("privy_id", userProviderId).single()
-      : await merchantQuery.eq("dynamic_id", userProviderId).single();
+        logo_url
+      `)
+      .eq("privy_id", privyId)
+      .single();
 
     if (merchantError || !merchant) {
       return {
@@ -108,17 +102,14 @@ export async function getMerchantById(
  */
 export async function getMerchantWithStatusCheck(
   supabase: TypedSupabaseClient,
-  userProviderId: string,
-  isPrivyAuth: boolean,
+  privyId: string,
   checkBlocked = true,
 ): Promise<{ merchant: MerchantData | null; error?: string; code?: string }> {
-  const merchantQuery = supabase
+  const { data: merchant, error: merchantError } = await supabase
     .from("merchants")
-    .select("merchant_id, status");
-
-  const { data: merchant, error: merchantError } = isPrivyAuth
-    ? await merchantQuery.eq("privy_id", userProviderId).single()
-    : await merchantQuery.eq("dynamic_id", userProviderId).single();
+    .select("merchant_id, status")
+    .eq("privy_id", privyId)
+    .single();
 
   if (merchantError || !merchant) {
     return { merchant: null, error: "Merchant not found" };
@@ -180,15 +171,23 @@ export async function resolvePreferredToken(
 }
 
 /**
- * Get destination address based on token type
+ * Get destination address based on token's chain
+ * Queries wallets table for the primary wallet of the token's chain
  */
-export function getDestinationAddress(
-  merchant: MerchantData,
-): string | null {
-  if (merchant.default_token_id === "USDC_XLM") {
-    return merchant.stellar_address || null;
-  }
-  return merchant.wallet_address || null;
+export async function getDestinationAddress(
+  supabase: TypedSupabaseClient,
+  merchantId: string,
+  chainId: string,
+): Promise<string | null> {
+  const { data: wallet } = await supabase
+    .from("wallets")
+    .select("address")
+    .eq("merchant_id", merchantId)
+    .eq("chain_id", chainId)
+    .eq("is_primary", true)
+    .single();
+
+  return wallet?.address || null;
 }
 
 // ============================================================================

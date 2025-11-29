@@ -34,6 +34,83 @@ export type Database = {
   }
   public: {
     Tables: {
+      audit_logs: {
+        Row: {
+          action: string
+          created_at: string | null
+          id: string
+          ip_address: string | null
+          merchant_id: string
+          metadata: Json | null
+          resource_id: string | null
+          resource_type: string | null
+          user_agent: string | null
+        }
+        Insert: {
+          action: string
+          created_at?: string | null
+          id?: string
+          ip_address?: string | null
+          merchant_id: string
+          metadata?: Json | null
+          resource_id?: string | null
+          resource_type?: string | null
+          user_agent?: string | null
+        }
+        Update: {
+          action?: string
+          created_at?: string | null
+          id?: string
+          ip_address?: string | null
+          merchant_id?: string
+          metadata?: Json | null
+          resource_id?: string | null
+          resource_type?: string | null
+          user_agent?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "audit_logs_merchant_id_fkey"
+            columns: ["merchant_id"]
+            isOneToOne: false
+            referencedRelation: "merchants"
+            referencedColumns: ["merchant_id"]
+          },
+        ]
+      }
+      chains: {
+        Row: {
+          chain_id: string
+          chain_type: string
+          created_at: string
+          explorer_url: string | null
+          icon_url: string | null
+          is_active: boolean
+          name: string
+          updated_at: string
+        }
+        Insert: {
+          chain_id: string
+          chain_type: string
+          created_at?: string
+          explorer_url?: string | null
+          icon_url?: string | null
+          is_active?: boolean
+          name: string
+          updated_at?: string
+        }
+        Update: {
+          chain_id?: string
+          chain_type?: string
+          created_at?: string
+          explorer_url?: string | null
+          icon_url?: string | null
+          is_active?: boolean
+          name?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       currencies: {
         Row: {
           created_at: string
@@ -151,6 +228,101 @@ export type Database = {
         }
         Relationships: []
       }
+      devices: {
+        Row: {
+          created_at: string | null
+          device_id: string
+          fcm_token: string
+          id: string
+          merchant_id: string
+          platform: string
+          updated_at: string | null
+        }
+        Insert: {
+          created_at?: string | null
+          device_id: string
+          fcm_token: string
+          id?: string
+          merchant_id: string
+          platform: string
+          updated_at?: string | null
+        }
+        Update: {
+          created_at?: string | null
+          device_id?: string
+          fcm_token?: string
+          id?: string
+          merchant_id?: string
+          platform?: string
+          updated_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "devices_merchant_id_fkey"
+            columns: ["merchant_id"]
+            isOneToOne: false
+            referencedRelation: "merchants"
+            referencedColumns: ["merchant_id"]
+          },
+        ]
+      }
+      wallets: {
+        Row: {
+          address: string
+          chain_id: string
+          created_at: string
+          is_primary: boolean
+          is_verified: boolean
+          label: string | null
+          merchant_id: string
+          external_wallet_id: string | null
+          source: string
+          updated_at: string
+          wallet_id: string
+        }
+        Insert: {
+          address: string
+          chain_id: string
+          created_at?: string
+          is_primary?: boolean
+          is_verified?: boolean
+          label?: string | null
+          merchant_id: string
+          external_wallet_id?: string | null
+          source?: string
+          updated_at?: string
+          wallet_id?: string
+        }
+        Update: {
+          address?: string
+          chain_id?: string
+          created_at?: string
+          is_primary?: boolean
+          is_verified?: boolean
+          label?: string | null
+          merchant_id?: string
+          external_wallet_id?: string | null
+          source?: string
+          updated_at?: string
+          wallet_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "wallets_chain_id_fkey"
+            columns: ["chain_id"]
+            isOneToOne: false
+            referencedRelation: "chains"
+            referencedColumns: ["chain_id"]
+          },
+          {
+            foreignKeyName: "wallets_merchant_id_fkey"
+            columns: ["merchant_id"]
+            isOneToOne: false
+            referencedRelation: "merchants"
+            referencedColumns: ["merchant_id"]
+          },
+        ]
+      }
       merchants: {
         Row: {
           created_at: string
@@ -159,13 +331,16 @@ export type Database = {
           default_token_id: string
           description: string | null
           display_name: string | null
-          dynamic_id: string | null
           email: string
           logo_url: string | null
           merchant_id: string
-          privy_id: string | null
+          pin_code_attempts: number | null
+          pin_code_blocked_at: string | null
+          pin_code_hash: string | null
+          pin_code_last_attempt_at: string | null
+          privy_id: string
+          status: string | null
           updated_at: string
-          wallet_address: string
         }
         Insert: {
           created_at?: string
@@ -174,13 +349,16 @@ export type Database = {
           default_token_id: string
           description?: string | null
           display_name?: string | null
-          dynamic_id?: string | null
           email: string
           logo_url?: string | null
           merchant_id?: string
-          privy_id?: string | null
+          pin_code_attempts?: number | null
+          pin_code_blocked_at?: string | null
+          pin_code_hash?: string | null
+          pin_code_last_attempt_at?: string | null
+          privy_id: string
+          status?: string | null
           updated_at?: string
-          wallet_address: string
         }
         Update: {
           created_at?: string
@@ -189,13 +367,16 @@ export type Database = {
           default_token_id?: string
           description?: string | null
           display_name?: string | null
-          dynamic_id?: string | null
           email?: string
           logo_url?: string | null
           merchant_id?: string
-          privy_id?: string | null
+          pin_code_attempts?: number | null
+          pin_code_blocked_at?: string | null
+          pin_code_hash?: string | null
+          pin_code_last_attempt_at?: string | null
+          privy_id?: string
+          status?: string | null
           updated_at?: string
-          wallet_address?: string
         }
         Relationships: [
           {
@@ -228,12 +409,15 @@ export type Database = {
           description: string | null
           display_amount: number
           display_currency: string
+          expired_at: string | null
           merchant_address: string
           merchant_chain_id: string
           merchant_id: string
           number: string | null
           order_id: string
+          payment_data: Json | null
           payment_id: string
+          preferred_token_id: string | null
           required_amount_usd: number
           required_token: string
           source_chain_name: string | null
@@ -249,12 +433,15 @@ export type Database = {
           description?: string | null
           display_amount: number
           display_currency: string
+          expired_at?: string | null
           merchant_address: string
           merchant_chain_id: string
           merchant_id: string
           number?: string | null
           order_id?: string
+          payment_data?: Json | null
           payment_id: string
+          preferred_token_id?: string | null
           required_amount_usd: number
           required_token: string
           source_chain_name?: string | null
@@ -270,12 +457,15 @@ export type Database = {
           description?: string | null
           display_amount?: number
           display_currency?: string
+          expired_at?: string | null
           merchant_address?: string
           merchant_chain_id?: string
           merchant_id?: string
           number?: string | null
           order_id?: string
+          payment_data?: Json | null
           payment_id?: string
+          preferred_token_id?: string | null
           required_amount_usd?: number
           required_token?: string
           source_chain_name?: string | null
@@ -293,70 +483,59 @@ export type Database = {
             referencedRelation: "currencies"
             referencedColumns: ["currency_id"]
           },
+          {
+            foreignKeyName: "orders_preferred_token_id_fkey"
+            columns: ["preferred_token_id"]
+            isOneToOne: false
+            referencedRelation: "tokens"
+            referencedColumns: ["token_id"]
+          },
         ]
       }
       tokens: {
         Row: {
           chain_id: string
           chain_name: string
+          created_at: string | null
+          decimals: number
+          icon_url: string | null
+          is_active: boolean
           token_address: string
           token_id: string
           token_name: string
+          updated_at: string | null
         }
         Insert: {
           chain_id: string
           chain_name: string
+          created_at?: string | null
+          decimals?: number
+          icon_url?: string | null
+          is_active?: boolean
           token_address: string
           token_id: string
           token_name: string
+          updated_at?: string | null
         }
         Update: {
           chain_id?: string
           chain_name?: string
+          created_at?: string | null
+          decimals?: number
+          icon_url?: string | null
+          is_active?: boolean
           token_address?: string
           token_id?: string
           token_name?: string
-        }
-        Relationships: []
-      }
-      withdrawals: {
-        Row: {
-          amount: number
-          created_at: string
-          currency: string
-          merchant_id: string
-          recipient: string
-          tx_hash: string | null
-          updated_at: string
-          withdrawal_id: string
-        }
-        Insert: {
-          amount: number
-          created_at?: string
-          currency?: string
-          merchant_id: string
-          recipient: string
-          tx_hash?: string | null
-          updated_at?: string
-          withdrawal_id?: string
-        }
-        Update: {
-          amount?: number
-          created_at?: string
-          currency?: string
-          merchant_id?: string
-          recipient?: string
-          tx_hash?: string | null
-          updated_at?: string
-          withdrawal_id?: string
+          updated_at?: string | null
         }
         Relationships: [
           {
-            foreignKeyName: "withdrawals_merchant_id_fkey"
-            columns: ["merchant_id"]
+            foreignKeyName: "tokens_chain_id_fkey"
+            columns: ["chain_id"]
             isOneToOne: false
-            referencedRelation: "merchants"
-            referencedColumns: ["merchant_id"]
+            referencedRelation: "chains"
+            referencedColumns: ["chain_id"]
           },
         ]
       }
@@ -365,7 +544,10 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      get_merchant_wallet_address: {
+        Args: { p_chain_id: string; p_merchant_id: string }
+        Returns: string
+      }
     }
     Enums: {
       payment_status:
@@ -374,6 +556,7 @@ export type Database = {
         | "COMPLETED"
         | "FAILED"
         | "DISCREPANCY"
+        | "EXPIRED"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -510,6 +693,7 @@ export const Constants = {
         "COMPLETED",
         "FAILED",
         "DISCREPANCY",
+        "EXPIRED",
       ],
     },
   },

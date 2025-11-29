@@ -17,7 +17,7 @@ export interface ResolvedMerchant extends MerchantData {
 /**
  * Merchant resolver middleware
  * Fetches and caches complete merchant data in context after auth
- * Must be used after dualAuthMiddleware
+ * Must be used after privyAuthMiddleware
  *
  * Sets the following context variables:
  * - merchant: Full merchant data object
@@ -28,19 +28,17 @@ export const merchantResolverMiddleware: MiddlewareHandler = async (
   next: Next,
 ) => {
   const supabase = c.get("supabase") as TypedSupabaseClient;
-  const userProviderId = c.get("dynamicId") as string;
-  const isPrivyAuth = c.get("isPrivyAuth") as boolean;
+  const privyId = c.get("privyId") as string;
 
-  if (!supabase || !userProviderId) {
+  if (!supabase || !privyId) {
     return c.json({ success: false, error: "Authentication required" }, 401);
   }
 
   // Query merchant with all necessary fields
-  const merchantQuery = supabase
+  const { data: merchant, error: merchantError } = await supabase
     .from("merchants")
     .select(`
       merchant_id,
-      dynamic_id,
       privy_id,
       email,
       display_name,
@@ -58,11 +56,9 @@ export const merchantResolverMiddleware: MiddlewareHandler = async (
       pin_code_last_attempt_at,
       created_at,
       updated_at
-    `);
-
-  const { data: merchant, error: merchantError } = isPrivyAuth
-    ? await merchantQuery.eq("privy_id", userProviderId).single()
-    : await merchantQuery.eq("dynamic_id", userProviderId).single();
+    `)
+    .eq("privy_id", privyId)
+    .single();
 
   if (merchantError || !merchant) {
     return c.json({ success: false, error: "Merchant not found" }, 404);
@@ -106,18 +102,18 @@ export const merchantResolverMiddleware: MiddlewareHandler = async (
 
 /**
  * Combined auth + merchant resolver middleware
- * Convenience middleware that combines dual auth and merchant resolution
+ * Convenience middleware that combines Privy auth and merchant resolution
  */
 export const authWithMerchantMiddleware: MiddlewareHandler = async (
   c: Context,
   next: Next,
 ) => {
   // Import here to avoid circular dependency
-  const { dualAuthMiddleware } = await import("./auth.middleware.ts");
+  const { privyAuthMiddleware } = await import("./auth.middleware.ts");
 
   // First run auth middleware
   let authNextCalled = false;
-  await dualAuthMiddleware(c, async () => {
+  await privyAuthMiddleware(c, async () => {
     authNextCalled = true;
   });
 

@@ -1,6 +1,6 @@
 # Rozo Backend - Project Summary
 
-A high-performance payment processing platform built with Supabase Edge Functions, supporting dual authentication and multi-chain crypto transactions.
+A high-performance payment processing platform built with Supabase Edge Functions, supporting Privy authentication and multi-chain crypto transactions.
 
 ## Quick Reference
 
@@ -9,7 +9,7 @@ A high-performance payment processing platform built with Supabase Edge Function
 | **Runtime**       | Deno (Supabase Edge Functions) |
 | **Framework**     | Hono                           |
 | **Database**      | PostgreSQL 17 (Supabase)       |
-| **Auth**          | Dynamic + Privy (dual JWT)     |
+| **Auth**          | Privy (JWT)                    |
 | **Payments**      | Daimo Pay                      |
 | **Blockchain**    | EVM (Base) + Stellar           |
 | **Notifications** | Pusher + FCM                   |
@@ -31,36 +31,36 @@ supabase/
 │   └── factories/        # Transaction factory
 │
 ├── functions/            # 12 Edge Functions
-└── migrations/           # 13 SQL migrations
+└── migrations/           # 16 SQL migrations
 ```
 
 ---
 
 ## Edge Functions
 
-| Function            | Purpose                    | Auth           |
-| ------------------- | -------------------------- | -------------- |
-| `merchants`         | Profile & PIN management   | JWT            |
-| `orders`            | Order CRUD & payment links | JWT            |
-| `deposits`          | Deposit management         | JWT            |
-| `withdrawals`       | Withdrawal processing      | JWT + PIN      |
-| `wallets`           | EVM/Stellar transfers      | JWT + PIN      |
-| `payment-callback`  | Daimo webhook              | Webhook secret |
-| `devices`           | FCM token registration     | JWT            |
-| `reports`           | Dashboard analytics        | JWT            |
-| `expired-orders`    | Order expiration cron      | Internal       |
-| `update-currencies` | Exchange rate cron         | Internal       |
-| `api-docs`          | OpenAPI documentation      | Public         |
+| Function           | Purpose                           | Auth           |
+| ------------------ | --------------------------------- | -------------- |
+| `profile`          | Merchant profile & PIN management | JWT            |
+| `wallets`          | Wallet management & chains        | JWT            |
+| `transfers`        | EVM/Stellar transfers             | JWT + PIN      |
+| `orders`           | Order CRUD & payment links        | JWT            |
+| `deposits`         | Deposit management                | JWT            |
+| `withdrawals`      | Withdrawal processing             | JWT + PIN      |
+| `payment-callback` | Daimo webhook                     | Webhook secret |
+| `devices`          | FCM token registration            | JWT            |
+| `reports`          | Dashboard analytics               | JWT            |
+| `cron`             | Expired orders & currency updates | Internal       |
+| `api-docs`         | OpenAPI documentation             | Public         |
 
 ---
 
 ## Core Concepts
 
-### Authentication (Dual Provider)
+### Authentication (Privy)
 
-- **Privy**: Primary auth with wallet management
-- **Dynamic**: Fallback wallet-based auth
-- All functions try Privy first, then Dynamic
+- **Privy**: Primary authentication with embedded wallet management
+- JWT tokens verified via Privy SDK
+- Each merchant identified by unique `privy_id`
 
 ### Merchant Status
 
@@ -90,37 +90,61 @@ PENDING → PROCESSING → COMPLETED
 
 ## Key Endpoints
 
-### Merchants
+### Profile
 
 ```
-GET    /merchants/           # Get profile
-POST   /merchants/           # Create/update profile
-POST   /merchants/pin        # Set PIN
-PUT    /merchants/pin        # Update PIN
-DELETE /merchants/pin        # Revoke PIN
-```
-
-### Orders
-
-```
-GET    /orders/              # List orders (paginated)
-GET    /orders/:id           # Get single order
-POST   /orders/              # Create order
-POST   /orders/:id/regenerate-payment  # Regenerate payment link
+GET    /profile              # Get profile
+POST   /profile              # Create profile
+PUT    /profile              # Update profile
+GET    /profile/status       # Check profile & PIN status
+POST   /profile/pin          # Set PIN
+PUT    /profile/pin          # Update PIN
+DELETE /profile/pin          # Revoke PIN
+POST   /profile/pin/validate # Validate PIN
 ```
 
 ### Wallets
 
 ```
-POST   /wallets/:id          # EVM transfer
-POST   /wallets/:id/enable-usdc       # Stellar trustline
-POST   /wallets/:id/stellar-transfer  # Stellar transfer
+GET    /wallets              # List wallets
+POST   /wallets              # Add wallet
+GET    /wallets/chains       # List supported chains
+POST   /wallets/sync         # Sync Privy embedded wallet
+GET    /wallets/:walletId    # Get wallet details
+PUT    /wallets/:walletId    # Update wallet
+DELETE /wallets/:walletId    # Remove wallet
+PUT    /wallets/:walletId/primary  # Set as primary
+```
+
+### Transfers
+
+```
+POST   /transfers/evm              # EVM chain transfer
+POST   /transfers/stellar          # Stellar transfer
+POST   /transfers/stellar/trustline  # Enable USDC trustline
+```
+
+### Orders
+
+```
+GET    /orders               # List orders (paginated)
+GET    /orders/:id           # Get single order
+POST   /orders               # Create order
+POST   /orders/:id/regenerate-payment  # Regenerate payment link
 ```
 
 ### Reports
 
 ```
 GET    /reports/summary?from=YYYY-MM-DD&to=YYYY-MM-DD&group_by=day
+```
+
+### Cron Jobs
+
+```
+POST   /cron/expired-orders      # Process expired orders
+POST   /cron/update-currencies   # Update currency rates
+GET    /cron/expired-orders/health  # Health check
 ```
 
 ---
@@ -132,8 +156,7 @@ GET    /reports/summary?from=YYYY-MM-DD&to=YYYY-MM-DD&group_by=day
 ROZO_SUPABASE_URL
 ROZO_SUPABASE_SERVICE_ROLE_KEY
 
-# Auth
-DYNAMIC_ENV_ID
+# Auth (Privy)
 PRIVY_APP_ID
 PRIVY_APP_SECRET
 

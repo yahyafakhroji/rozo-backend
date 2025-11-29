@@ -4,7 +4,7 @@
  */
 
 import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
-import type { Database } from "../../../database.types.ts";
+import type { Database } from "../database.types.ts";
 
 // Supabase client type
 export type TypedSupabaseClient = SupabaseClient<Database>;
@@ -15,14 +15,11 @@ export type TypedSupabaseClient = SupabaseClient<Database>;
 
 export interface MerchantData {
   merchant_id: string;
-  dynamic_id?: string;
-  privy_id?: string;
+  privy_id: string;
   email?: string;
   display_name?: string;
   description?: string;
   logo_url?: string;
-  wallet_address: string;
-  stellar_address?: string;
   default_currency?: string;
   default_token_id: string;
   default_language?: string;
@@ -59,6 +56,21 @@ export interface MerchantStatus {
 }
 
 // ============================================================================
+// Chain Types
+// ============================================================================
+
+export interface ChainData {
+  chain_id: string;
+  name: string;
+  chain_type: "evm" | "stellar" | "solana";
+  icon_url?: string | null;
+  explorer_url?: string | null;
+  is_active: boolean;
+  created_at?: string;
+  updated_at?: string;
+}
+
+// ============================================================================
 // Token Types
 // ============================================================================
 
@@ -68,6 +80,51 @@ export interface TokenData {
   token_address: string;
   chain_id: string;
   chain_name: string;
+  icon_url?: string | null;
+  is_active?: boolean;
+  decimals?: number;
+}
+
+// ============================================================================
+// Wallet Types
+// ============================================================================
+
+export type WalletSource = "privy" | "manual";
+
+export interface MerchantWalletData {
+  wallet_id: string;
+  merchant_id: string;
+  chain_id: string;
+  address: string;
+  label?: string | null;
+  source: WalletSource;
+  external_wallet_id?: string | null;
+  is_primary: boolean;
+  is_verified: boolean;
+  created_at?: string;
+  updated_at?: string;
+  // Joined data
+  chain?: ChainData;
+}
+
+export interface AddMerchantWalletRequest {
+  chain_id: string;
+  address: string;
+  label?: string;
+  source?: WalletSource;
+  is_primary?: boolean;
+}
+
+export interface UpdateMerchantWalletRequest {
+  label?: string;
+  is_primary?: boolean;
+}
+
+export interface MerchantWalletResult {
+  success: boolean;
+  wallet?: MerchantWalletData;
+  wallets?: MerchantWalletData[];
+  error?: string;
 }
 
 // ============================================================================

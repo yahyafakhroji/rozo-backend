@@ -1,4 +1,4 @@
-import { generateAuthorizationSignature, PrivyClient } from "@privy-io/node";
+import { generateAuthorizationSignature, PrivyClient } from "npm:@privy-io/node";
 import { Buffer } from "node:buffer";
 import {
   Asset,
@@ -10,7 +10,7 @@ import {
   Operation,
   Transaction,
   TransactionBuilder,
-} from "stellar-sdk";
+} from "npm:stellar-sdk";
 
 // Debug utilities
 import { stellarTrustlineLogger as logger } from "../../_shared/utils/debug.utils.ts";

@@ -228,7 +228,7 @@ export async function sendPaymentNotification(
     };
 
     const { data: devices, error: devicesError } = await db
-      .from("merchant_devices")
+      .from("devices")
       .select("fcm_token")
       .eq("merchant_id", merchantId);
 

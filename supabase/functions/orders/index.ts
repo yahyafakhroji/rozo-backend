@@ -1,22 +1,21 @@
 /**
  * Orders Function
  * Handles order creation, retrieval, and payment regeneration
- * Refactored to use new middleware, factories, and type-safe utilities
  */
 
 import { Hono } from "jsr:@hono/hono";
 import { cors } from "jsr:@hono/hono/cors";
 
 // Config
-import { corsConfig, CONSTANTS } from "../../_shared/config/index.ts";
+import { corsConfig } from "../../_shared/config/index.ts";
 
 // Middleware
 import {
-  dualAuthMiddleware,
   errorMiddleware,
-  notFoundHandler,
-  merchantResolverMiddleware,
   getMerchantFromContext,
+  merchantResolverMiddleware,
+  notFoundHandler,
+  privyAuthMiddleware,
 } from "../../_shared/middleware/index.ts";
 
 // Services
@@ -31,21 +30,32 @@ import {
 // Schemas
 import {
   CreateOrderSchema,
-  RegeneratePaymentSchema,
-  PaginationSchema,
   OrderStatusSchema,
+  PaginationSchema,
+  RegeneratePaymentSchema,
   safeParseBody,
 } from "../../_shared/schemas/index.ts";
 
 // Types
 import type { TypedSupabaseClient } from "../../_shared/types/common.types.ts";
+import type { ApiResponse, PaginatedResponse } from "../../_shared/types/api.types.ts";
+import type {
+  CreateOrderData,
+  Order,
+  OrderData,
+  RegeneratePaymentData,
+} from "./types.ts";
+
+// ============================================================================
+// App Setup
+// ============================================================================
 
 const app = new Hono().basePath("/orders");
 
-// Apply middleware stack
+// Global middleware
 app.use("*", cors(corsConfig));
 app.use("*", errorMiddleware);
-app.use("*", dualAuthMiddleware);
+app.use("*", privyAuthMiddleware);
 app.use("*", merchantResolverMiddleware);
 
 // ============================================================================
@@ -53,13 +63,13 @@ app.use("*", merchantResolverMiddleware);
 // ============================================================================
 
 /**
- * GET /orders - Get all orders for merchant
+ * GET /orders - Get all orders for merchant (paginated)
  */
 app.get("/", async (c) => {
   const supabase = c.get("supabase") as TypedSupabaseClient;
   const merchant = getMerchantFromContext(c);
 
-  // Parse and validate query parameters
+  // Parse pagination params
   const url = new URL(c.req.url);
   const paginationResult = safeParseBody(PaginationSchema, {
     limit: url.searchParams.get("limit") || undefined,
@@ -67,7 +77,11 @@ app.get("/", async (c) => {
   });
 
   if (!paginationResult.success) {
-    return c.json({ success: false, error: paginationResult.error }, 400);
+    return c.json<ApiResponse<null>>({
+      success: false,
+      error: paginationResult.error,
+      code: "VALIDATION_ERROR",
+    }, 400);
   }
 
   const { limit, offset } = paginationResult.data;
@@ -79,7 +93,11 @@ app.get("/", async (c) => {
   if (statusParam) {
     const statusResult = safeParseBody(OrderStatusSchema, statusParam);
     if (!statusResult.success) {
-      return c.json({ success: false, error: statusResult.error }, 400);
+      return c.json<ApiResponse<null>>({
+        success: false,
+        error: statusResult.error,
+        code: "VALIDATION_ERROR",
+      }, 400);
     }
     statusFilter = statusResult.data;
   }
@@ -93,7 +111,7 @@ app.get("/", async (c) => {
     return query.eq("status", statusFilter);
   };
 
-  // Execute queries in parallel for better performance
+  // Execute queries in parallel
   const [countResult, ordersResult] = await Promise.all([
     applyStatusFilter(
       supabase
@@ -115,15 +133,24 @@ app.get("/", async (c) => {
   const { data: orders, error } = ordersResult;
 
   if (error) {
-    return c.json({ success: false, error: error.message }, 400);
+    return c.json<ApiResponse<null>>({
+      success: false,
+      error: error.message,
+      code: "DATABASE_ERROR",
+    }, 400);
   }
 
-  return c.json({
+  const total = totalCount || 0;
+
+  return c.json<PaginatedResponse<Order>>({
     success: true,
-    orders: orders || [],
-    total: totalCount || 0,
-    offset,
-    limit,
+    data: (orders || []) as Order[],
+    pagination: {
+      total,
+      limit,
+      offset,
+      totalPages: Math.ceil(total / limit),
+    },
   });
 });
 
@@ -135,7 +162,6 @@ app.get("/:orderId", async (c) => {
   const merchant = getMerchantFromContext(c);
   const orderId = c.req.param("orderId");
 
-  // Get order
   const { data: order, error } = await supabase
     .from("orders")
     .select("*")
@@ -144,17 +170,21 @@ app.get("/:orderId", async (c) => {
     .single();
 
   if (error || !order) {
-    return c.json({ success: false, error: "Order not found" }, 404);
+    return c.json<ApiResponse<null>>({
+      success: false,
+      error: "Order not found",
+      code: "NOT_FOUND",
+    }, 404);
   }
 
   const qrcode = getPaymentQrCodeUrl(order.payment_id);
 
-  return c.json({
+  return c.json<ApiResponse<OrderData>>({
     success: true,
-    order: {
+    data: {
       ...order,
       qrcode,
-    },
+    } as OrderData,
   });
 });
 
@@ -165,15 +195,15 @@ app.post("/", async (c) => {
   const supabase = c.get("supabase") as TypedSupabaseClient;
   const merchant = getMerchantFromContext(c);
 
-  // Parse and validate request body
-  const body = await c.req.json();
-  const validation = safeParseBody(CreateOrderSchema, body);
-
+  const validation = safeParseBody(CreateOrderSchema, await c.req.json());
   if (!validation.success) {
-    return c.json({ success: false, error: validation.error }, 400);
+    return c.json<ApiResponse<null>>({
+      success: false,
+      error: validation.error,
+      code: "VALIDATION_ERROR",
+    }, 400);
   }
 
-  // Create order using factory
   const result = await createTransaction({
     supabase,
     merchant,
@@ -182,29 +212,26 @@ app.post("/", async (c) => {
   });
 
   if (!result.success || !result.paymentDetail) {
-    const status = result.code ? 403 : 400;
-    return c.json(
-      { success: false, error: result.error, code: result.code },
-      status,
-    );
+    return c.json<ApiResponse<null>>({
+      success: false,
+      error: result.error || "Failed to create order",
+      code: result.code || "ORDER_ERROR",
+    }, result.code ? 403 : 400);
   }
 
   const qrcode = getPaymentQrCodeUrl(result.paymentDetail.id);
 
-  return c.json(
-    {
-      success: true,
-      message: "Order created successfully",
-      data: {
-        payment_detail: result.paymentDetail,
-        order_id: result.record_id,
-        order_number: result.number,
-        expired_at: result.expired_at,
-        qrcode,
-      },
+  return c.json<ApiResponse<CreateOrderData>>({
+    success: true,
+    data: {
+      payment_detail: result.paymentDetail,
+      order_id: result.record_id!,
+      order_number: result.number || null,
+      expired_at: result.expired_at!,
+      qrcode,
     },
-    201,
-  );
+    message: "Order created successfully",
+  }, 201);
 });
 
 /**
@@ -227,7 +254,6 @@ app.post("/:orderId/regenerate-payment", async (c) => {
     // Body is optional
   }
 
-  // Regenerate payment using factory
   const result = await regenerateOrderPaymentLink({
     supabase,
     merchant,
@@ -236,27 +262,29 @@ app.post("/:orderId/regenerate-payment", async (c) => {
   });
 
   if (!result.success || !result.paymentDetail) {
-    const status = result.code ? 403 : 400;
-    return c.json(
-      { success: false, error: result.error, code: result.code },
-      status,
-    );
+    return c.json<ApiResponse<null>>({
+      success: false,
+      error: result.error || "Failed to regenerate payment",
+      code: result.code || "REGENERATE_ERROR",
+    }, result.code ? 403 : 400);
   }
 
   const qrcode = getPaymentQrCodeUrl(result.paymentDetail.id);
 
-  return c.json({
+  return c.json<ApiResponse<RegeneratePaymentData>>({
     success: true,
-    qrcode,
-    order_id: orderId,
-    expired_at: result.expired_at,
+    data: {
+      order_id: orderId,
+      expired_at: result.expired_at!,
+      qrcode,
+      payment_detail: result.paymentDetail,
+    },
     message: "Payment link regenerated successfully",
-    paymentDetail: result.paymentDetail,
   });
 });
 
 // Not found handler
 app.notFound(notFoundHandler);
 
-// Export for Deno
+// Export
 Deno.serve(app.fetch);

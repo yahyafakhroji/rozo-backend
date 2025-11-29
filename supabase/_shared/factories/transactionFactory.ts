@@ -10,7 +10,8 @@ import type {
   TokenData,
   TypedSupabaseClient,
 } from "../types/common.types.ts";
-import { resolvePreferredToken, getDestinationAddress } from "../services/merchant.service.ts";
+import { resolvePreferredToken } from "../services/merchant.service.ts";
+import { getDestinationWalletAddress } from "../services/wallet.service.ts";
 import { convertCurrencyToUSD } from "../services/currency.service.ts";
 import { createOrderPaymentLink, createDepositPaymentLink } from "../services/payment.service.ts";
 import { generateOrderNumber } from "../utils/helpers.ts";
@@ -117,10 +118,26 @@ export async function createTransaction(
       preferredToken = preferredTokenResult.token;
     }
 
-    // Step 4: Generate transaction number
+    // Step 4: Get destination address from wallets table
+    const addressResult = await getDestinationWalletAddress(
+      supabase,
+      merchant.merchant_id,
+      destinationTokenResult.token,
+    );
+
+    if (!addressResult.success || !addressResult.address) {
+      return {
+        success: false,
+        error: addressResult.error || "No wallet found for this chain",
+      };
+    }
+
+    const destinationAddress = addressResult.address;
+
+    // Step 5: Generate transaction number
     const transactionNumber = generateOrderNumber();
 
-    // Step 5: Create payment link
+    // Step 6: Create payment link
     const paymentResult = type === "order"
       ? await createOrderPaymentLink(
           merchant,
@@ -129,6 +146,7 @@ export async function createTransaction(
           conversionResult.usdAmount,
           destinationTokenResult.token,
           preferredToken,
+          destinationAddress,
         )
       : await createDepositPaymentLink(
           merchant,
@@ -136,6 +154,7 @@ export async function createTransaction(
           transactionNumber,
           conversionResult.usdAmount,
           destinationTokenResult.token,
+          destinationAddress,
         );
 
     if (!paymentResult.success || !paymentResult.paymentDetail) {
@@ -145,7 +164,7 @@ export async function createTransaction(
       };
     }
 
-    // Step 6: Insert record
+    // Step 7: Insert record
     const insertResult = type === "order"
       ? await insertOrderRecord(
           supabase,
@@ -213,10 +232,12 @@ async function insertOrderRecord(
     now.getTime() + CONSTANTS.ORDER.EXPIRY_MINUTES * 60 * 1000,
   );
 
-  const destinationAddress = getDestinationAddress(merchant);
-  if (!destinationAddress) {
-    return { success: false, error: "Destination address not found" };
+  // Get destination address from wallets table
+  const addressResult = await getDestinationWalletAddress(supabase, merchant.merchant_id, destinationToken);
+  if (!addressResult.success || !addressResult.address) {
+    return { success: false, error: addressResult.error || "Destination address not found" };
   }
+  const destinationAddress = addressResult.address;
 
   const orderToInsert = {
     number: orderNumber,
@@ -262,10 +283,12 @@ async function insertDepositRecord(
   usdAmount: number,
   token: TokenData,
 ): Promise<{ success: boolean; record?: TransactionRecord; error?: string }> {
-  const destinationAddress = getDestinationAddress(merchant);
-  if (!destinationAddress) {
-    return { success: false, error: "Destination address not found" };
+  // Get destination address from wallets table
+  const addressResult = await getDestinationWalletAddress(supabase, merchant.merchant_id, token);
+  if (!addressResult.success || !addressResult.address) {
+    return { success: false, error: addressResult.error || "Destination address not found" };
   }
+  const destinationAddress = addressResult.address;
 
   const now = new Date().toISOString();
   const depositToInsert = {
@@ -368,6 +391,20 @@ export async function regenerateOrderPaymentLink(
       };
     }
 
+    // Get destination address from wallets table
+    const addressResult = await getDestinationWalletAddress(
+      supabase,
+      merchant.merchant_id,
+      destinationTokenResult.token,
+    );
+
+    if (!addressResult.success || !addressResult.address) {
+      return {
+        success: false,
+        error: addressResult.error || "No wallet found for this chain",
+      };
+    }
+
     // Create new payment link
     const paymentResult = await createOrderPaymentLink(
       merchant,
@@ -381,6 +418,7 @@ export async function regenerateOrderPaymentLink(
       order.required_amount_usd,
       destinationTokenResult.token,
       preferredTokenResult.token,
+      addressResult.address,
     );
 
     if (!paymentResult.success || !paymentResult.paymentDetail) {

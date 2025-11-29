@@ -4,7 +4,7 @@
  */
 
 import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
-import type { Database } from "../../../database.types.ts";
+import type { Database } from "../database.types.ts";
 
 export type TypedSupabaseClient = SupabaseClient<Database>;
 
@@ -30,21 +30,18 @@ export function createSupabaseClient(
  * Get environment variables for authentication
  */
 export function getAuthEnvVars(): {
-  dynamicEnvId: string;
   privyAppId: string;
   privyAppSecret: string;
   supabaseUrl: string;
   supabaseKey: string;
   valid: boolean;
 } {
-  const dynamicEnvId = Deno.env.get("DYNAMIC_ENV_ID") || "";
   const privyAppId = Deno.env.get("PRIVY_APP_ID") || "";
   const privyAppSecret = Deno.env.get("PRIVY_APP_SECRET") || "";
   const supabaseUrl = Deno.env.get("ROZO_SUPABASE_URL") || "";
   const supabaseKey = Deno.env.get("ROZO_SUPABASE_SERVICE_ROLE_KEY") || "";
 
   const valid = !!(
-    dynamicEnvId &&
     privyAppId &&
     privyAppSecret &&
     supabaseUrl &&
@@ -52,7 +49,6 @@ export function getAuthEnvVars(): {
   );
 
   return {
-    dynamicEnvId,
     privyAppId,
     privyAppSecret,
     supabaseUrl,
